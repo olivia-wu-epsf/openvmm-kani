@@ -35,6 +35,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
 use thiserror::Error;
+use virt::IsolationType;
 use vmbus_async::queue::IncomingPacket;
 use vmbus_async::queue::OutgoingPacket;
 use vmbus_async::queue::Queue;
@@ -338,7 +339,11 @@ impl VpciDeviceDescription {
     /// Initializes the device, returning a VPCI device instance that can be
     /// used to interact with it. Also returns an object to use to get notified
     /// when the device is ejected or surprise removed.
-    pub async fn init(self) -> anyhow::Result<(VpciDevice, VpciDeviceEject)> {
+    pub async fn init(
+        self,
+        isolation_type: IsolationType,
+        vtom: u64,
+    ) -> anyhow::Result<(VpciDevice, VpciDeviceEject)> {
         let requirements = self
             .req
             .call_failable(WorkerRequest::QueryResourceRequirements, self.id)
@@ -359,7 +364,12 @@ impl VpciDeviceDescription {
             eject,
         } = self;
 
-        let tdisp = VpciClientTdispState::new(req.clone(), id.slot.into_bits() as u64);
+        let tdisp = VpciClientTdispState::new(
+            req.clone(),
+            id.slot.into_bits() as u64,
+            isolation_type,
+            vtom,
+        );
 
         // After this, the device is considered initialized and the caller is
         // responsible notifying the worker when the device is no longer in use.

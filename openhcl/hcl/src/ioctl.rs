@@ -52,6 +52,7 @@ use hvdef::hypercall::HvInterceptType;
 use hvdef::hypercall::HypercallOutput;
 use hvdef::hypercall::InitialVpContextX64;
 use hvdef::hypercall::ModifyHostVisibility;
+use inspect::Inspect;
 use memory_range::MemoryRange;
 use pal::unix::pthread::*;
 use parking_lot::Mutex;
@@ -1362,6 +1363,12 @@ impl IsolationType {
     /// Returns whether the isolation type is hardware-backed.
     pub fn is_hardware_isolated(&self) -> bool {
         matches!(self, Self::Snp | Self::Tdx)
+    }
+}
+
+impl Inspect for IsolationType {
+    fn inspect(&self, req: inspect::Request<'_>) {
+        req.value(format!("{self:?}"))
     }
 }
 
