@@ -12,6 +12,7 @@ use chipset_device::pci::PciConfigSpace;
 use closeable_mutex::CloseableMutex;
 use guestmem::GuestMemory;
 use guid::Guid;
+use hvdef::Vtl;
 use openhcl_tdisp::TdispVirtualDeviceInterface;
 use openhcl_tdisp::mocks::TdispMockResourceValidator;
 use pal_async::DefaultDriver;
@@ -127,6 +128,7 @@ async fn test_negotiate_version(driver: DefaultDriver) {
             Some(Arc::new(TdispMockResourceValidator::new())),
             IsolationType::None,
             0,
+            Vtl::Vtl0,
         )
         .await
         .unwrap();
@@ -190,6 +192,7 @@ async fn test_tdisp_interface_get_device_interface_info(driver: DefaultDriver) {
             Some(Arc::new(TdispMockResourceValidator::new())),
             IsolationType::None,
             0,
+            Vtl::Vtl0,
         )
         .await
         .unwrap();

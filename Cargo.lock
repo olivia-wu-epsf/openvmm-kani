@@ -10257,6 +10257,7 @@ dependencies = [
  "guestmem",
  "guid",
  "hcl",
+ "hvdef",
  "inspect",
  "mesh",
  "openhcl_tdisp",
