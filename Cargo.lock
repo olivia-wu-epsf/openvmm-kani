@@ -10320,6 +10320,7 @@ dependencies = [
  "vmotherboard",
  "vpci",
  "vpci_client",
+ "vpci_protocol",
 ]
 
 [[package]]
