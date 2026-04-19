@@ -3208,7 +3208,7 @@ async fn new_underhill_vm(
                 use openhcl_tdisp::TdispResourceValidationInterface;
                 #[cfg(feature = "dev_snp_ohcl_tio_support")]
                 use openhcl_tdisp::TdispSevTioResourceValidator;
-                use openhcl_tdisp::mocks::TdispMockResourceValidator;
+                use openhcl_tdisp::mocks::TdispNoopResourceValidator;
 
                 use vpci_relay::*;
 
@@ -3220,13 +3220,13 @@ async fn new_underhill_vm(
                         vtom.unwrap_or(0),
                     )?))
                 } else {
-                    Some(Arc::new(TdispMockResourceValidator::new()))
+                    Some(Arc::new(TdispNoopResourceValidator::new()))
                 };
 
                 #[cfg(not(feature = "dev_snp_ohcl_tio_support"))]
                 let resource_validator: Option<
                     Arc<dyn TdispResourceValidationInterface>,
-                > = Some(Arc::new(TdispMockResourceValidator::new()));
+                > = Some(Arc::new(TdispNoopResourceValidator::new()));
 
                 let mut relay = VpciRelay::new(
                     driver_source.clone(),
