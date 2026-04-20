@@ -21,7 +21,9 @@ pub use pci_core::spec::hwid::Subclass;
 use anyhow::Context as _;
 use chipset_device::ChipsetDevice;
 use chipset_device::io::IoResult;
+use chipset_device::io::deferred::DeferredWrite;
 use chipset_device::pci::PciConfigSpace;
+use chipset_device::poll_device::PollDevice;
 use futures::StreamExt as _;
 use inspect::Inspect;
 use inspect::InspectMut;
@@ -31,7 +33,10 @@ use openhcl_tdisp::TdispVirtualDeviceInterface;
 use pci_core::spec::cfg_space::HeaderType00;
 use pci_core::spec::hwid::HardwareIds;
 use state_unit::StateUnits;
+use std::future::Future;
 use std::future::poll_fn;
+use std::pin::Pin;
+use std::task::Waker;
 use std::sync::Arc;
 use std::task::Poll;
 use user_driver::DmaClient;
@@ -417,7 +422,11 @@ impl VpciRelay {
         let device_name = format!("assigned_device:vpci-{instance_id}");
         let (device_unit, device) = chipset
             .add_dyn_device(&self.driver_source, state_units, device_name, async |_| {
-                Ok(RelayedVpciDevice(vpci_device.clone()))
+                Ok(RelayedVpciDevice {
+                    device: vpci_device.clone(),
+                    pending: None,
+                    waker: Waker::noop().clone(),
+                })
             })
             .await?;
 
@@ -544,8 +553,21 @@ impl VpciRelay {
 }
 
 #[derive(InspectMut)]
-#[inspect(transparent)]
-struct RelayedVpciDevice(Arc<VpciDevice>);
+struct RelayedVpciDevice {
+    #[inspect(flatten)]
+    device: Arc<VpciDevice>,
+    /// In-flight deferred STATUS_COMMAND write. Driven by [`PollDevice`].
+    #[inspect(skip)]
+    pending: Option<(
+        DeferredWrite,
+        Pin<Box<dyn Future<Output = ()> + Send + Sync>>,
+    )>,
+    /// Waker captured from the most recent `PollDevice::poll_device` call.
+    /// We wake it from `pci_cfg_write` when we install a new pending future
+    /// so the chipset device unit re-polls us.
+    #[inspect(skip)]
+    waker: Waker,
+}
 
 impl ChipsetDevice for RelayedVpciDevice {
     fn supports_pci(&mut self) -> Option<&mut dyn PciConfigSpace> {
@@ -554,6 +576,24 @@ impl ChipsetDevice for RelayedVpciDevice {
 
     fn supports_tdisp_isolation(&mut self) -> Option<&mut dyn TdispIsolationReporter> {
         Some(self)
+    }
+
+    fn supports_poll_device(&mut self) -> Option<&mut dyn PollDevice> {
+        Some(self)
+    }
+}
+
+impl PollDevice for RelayedVpciDevice {
+    fn poll_device(&mut self, cx: &mut std::task::Context<'_>) {
+        self.waker = cx.waker().clone();
+        if let Some((_, fut)) = self.pending.as_mut() {
+            if fut.as_mut().poll(cx).is_ready() {
+                // Future done — complete the deferred write so the bus can
+                // continue draining any queued config writes.
+                let (deferred, _) = self.pending.take().expect("just checked");
+                deferred.complete();
+            }
+        }
     }
 }
 
@@ -569,7 +609,7 @@ impl TdispIsolationReporter for RelayedVpciDevice {
         // lock, it indicates a paravisor-internal bug — surface it as
         // `Error` so the caller can log and reply with a non-success
         // NTSTATUS.
-        let Some(snapshot) = self.0.tdisp_try_isolation_snapshot() else {
+        let Some(snapshot) = self.device.tdisp_try_isolation_snapshot() else {
             tracing::error!(
                 "tdisp_isolation_report: failed to acquire TDISP lock; this \
                  indicates a paravisor-internal bug as packets for a device \
@@ -605,16 +645,55 @@ impl TdispIsolationReporter for RelayedVpciDevice {
 
 impl PciConfigSpace for RelayedVpciDevice {
     fn pci_cfg_read(&mut self, offset: u16, value: &mut u32) -> IoResult {
-        *value = self.0.read_cfg(offset);
+        *value = self.device.read_cfg(offset);
         IoResult::Ok
     }
 
     fn pci_cfg_write(&mut self, offset: u16, value: u32) -> IoResult {
-        self.0.write_cfg(offset, value);
+        // For STATUS_COMMAND writes, detect the MMIO-enable edge BEFORE
+        // issuing the write so we can dispatch the correct TDISP notification.
+        // The bus serializes cfg writes to this device, so at most one
+        // deferred write is in flight at a time.
+        let mmio_edge = if HeaderType00(offset) == HeaderType00::STATUS_COMMAND {
+            use pci_core::spec::cfg_space::Command;
+            let prev = Command::from(self.device.read_cfg(offset) as u16).mmio_enabled();
+            let next = Command::from(value as u16).mmio_enabled();
+            match (prev, next) {
+                (false, true) => Some(true),
+                (true, false) => Some(false),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
-        // Intercept command register writes to notify TDISP state changes for MMIO reconfiguration.
-        if HeaderType00(offset) == HeaderType00::STATUS_COMMAND {
-            self.0.notify_tdisp_of_mmio_bars();
+        self.device.write_cfg(offset, value);
+
+        // If the command register write crossed an MMIO-enable edge, drive
+        // the appropriate TDISP notification via a deferred chipset write.
+        // The helper functions may await on the per-device TDISP mutex and on
+        // host-side TDISP commands; `PollDevice::poll_device` drives the
+        // future to completion.
+        if let Some(enabled) = mmio_edge {
+            let (write, token) = chipset_device::io::deferred::defer_write();
+            let device = self.device.clone();
+            let fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>> = if enabled {
+                Box::pin(async move { device.notify_tdisp_of_mmio_bars().await })
+            } else {
+                Box::pin(async move { device.notify_tdisp_of_mmio_disabled().await })
+            };
+            tracing::info!(
+                offset,
+                value,
+                mmio_enabled = enabled,
+                "dispatching deferred STATUS_COMMAND write for TDISP notification"
+            );
+            self.pending = Some((write, fut));
+            // Wake the device unit's poll loop so `poll_device` drives the
+            // pending future. Without this, the unit would sit idle until
+            // something else signaled its poll event.
+            self.waker.wake_by_ref();
+            return IoResult::Defer(token);
         }
         IoResult::Ok
     }
