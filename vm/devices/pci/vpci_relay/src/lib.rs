@@ -36,9 +36,9 @@ use state_unit::StateUnits;
 use std::future::Future;
 use std::future::poll_fn;
 use std::pin::Pin;
-use std::task::Waker;
 use std::sync::Arc;
 use std::task::Poll;
+use std::task::Waker;
 use user_driver::DmaClient;
 use virt::IsolationType;
 use vmbus_client::driver::OpenParams;
@@ -138,7 +138,7 @@ impl RelayedDevice {
 
         // Only devices that actually completed at least a Bind have a
         // TDI on the host side to unbind. Non-TDISP devices stay in
-        // `Uninitialized` and must be left alone — `tdisp_unbind` on
+        // `Uninitialized` and must be left alone. `tdisp_unbind` on
         // them would return a host error.
         if self.vpci_device.tdisp_tdi_state().await != TdispTdiState::Uninitialized {
             if let Err(err) = self
@@ -402,6 +402,27 @@ impl VpciRelay {
                             // If attestation succeeds, we will relay the device as normal. When calls are made to assign resources,
                             // we will call to the platform to validate the resources for private access knowing that attestation succeeded.
                             // The device is now in the Run state.
+                            //
+                            // Now unbind the device so the guest can drive its own bind/attest cycle
+                            // when it assigns resources. Preserve the cached TDI interface report so
+                            // that VPCI_QUERY_ISOLATED_RESOURCES can still answer with real MMIO/DMA
+                            // isolation classification while the TDI sits in `Unlocked`.
+                            match vpci_device
+                                .tdisp_unbind_preserve_report(
+                                    tdisp::TdispGuestUnbindReason::Graceful,
+                                )
+                                .await
+                            {
+                                Ok(()) => tracing::info!(
+                                    %instance_id,
+                                    "TDISP post-attestation unbind succeeded; device is Unlocked with cached report"
+                                ),
+                                Err(e) => tracing::error!(
+                                    %instance_id,
+                                    error = &*e as &dyn std::error::Error,
+                                    "TDISP post-attestation unbind failed; continuing to relay device"
+                                ),
+                            }
                         }
                         Err(e) => {
                             tracing::info!(%instance_id, failure_reason = ?e, "TDISP attestation failed for device");
@@ -588,7 +609,7 @@ impl PollDevice for RelayedVpciDevice {
         self.waker = cx.waker().clone();
         if let Some((_, fut)) = self.pending.as_mut() {
             if fut.as_mut().poll(cx).is_ready() {
-                // Future done — complete the deferred write so the bus can
+                // Future done; complete the deferred write so the bus can
                 // continue draining any queued config writes.
                 let (deferred, _) = self.pending.take().expect("just checked");
                 deferred.complete();
@@ -606,7 +627,7 @@ impl TdispIsolationReporter for RelayedVpciDevice {
         // through the same VMBus channel worker, so the per-device TDISP
         // mutex must not be contended when the guest issues
         // `VPCI_QUERY_ISOLATED_RESOURCES`. If we do fail to acquire the
-        // lock, it indicates a paravisor-internal bug — surface it as
+        // lock, it indicates a paravisor-internal bug. Surface it as
         // `Error` so the caller can log and reply with a non-success
         // NTSTATUS.
         let Some(snapshot) = self.device.tdisp_try_isolation_snapshot() else {
@@ -667,35 +688,76 @@ impl PciConfigSpace for RelayedVpciDevice {
             None
         };
 
-        self.device.write_cfg(offset, value);
-
         // If the command register write crossed an MMIO-enable edge, drive
         // the appropriate TDISP notification via a deferred chipset write.
         // The helper functions may await on the per-device TDISP mutex and on
         // host-side TDISP commands; `PollDevice::poll_device` drives the
         // future to completion.
-        if let Some(enabled) = mmio_edge {
-            let (write, token) = chipset_device::io::deferred::defer_write();
-            let device = self.device.clone();
-            let fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>> = if enabled {
-                Box::pin(async move { device.notify_tdisp_of_mmio_bars().await })
-            } else {
-                Box::pin(async move { device.notify_tdisp_of_mmio_disabled().await })
-            };
-            tracing::info!(
-                offset,
-                value,
-                mmio_enabled = enabled,
-                "dispatching deferred STATUS_COMMAND write for TDISP notification"
-            );
-            self.pending = Some((write, fut));
-            // Wake the device unit's poll loop so `poll_device` drives the
-            // pending future. Without this, the unit would sit idle until
-            // something else signaled its poll event.
-            self.waker.wake_by_ref();
-            return IoResult::Defer(token);
+        match mmio_edge {
+            Some(true) => {
+                // MMIO-enable edge: issue the cfg write first, then notify
+                // TDISP so the host can activate the device.
+                self.device.write_cfg(offset, value);
+
+                let (write, token) = chipset_device::io::deferred::defer_write();
+                let device = self.device.clone();
+                let fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>> =
+                    Box::pin(async move { device.tdisp_on_device_activate().await });
+
+                tracing::info!(
+                    offset,
+                    value,
+                    mmio_enabled = true,
+                    "dispatching deferred STATUS_COMMAND write for TDISP notification"
+                );
+
+                self.pending = Some((write, fut));
+                self.waker.wake_by_ref();
+                IoResult::Defer(token)
+            }
+            Some(false) => {
+                // MMIO-disable edge: writing to the command register while
+                // the device is in the Run state will cause the device to
+                // error out. If the TDI is not in Uninitialized or Unlocked,
+                // defer the cfg write until after the TDISP unbind. The
+                // cfg write then happens regardless of whether the unbind
+                // succeeds or fails. For Uninitialized/Unlocked we can write
+                // immediately since no active bind is in place.
+                let (write, token) = chipset_device::io::deferred::defer_write();
+                let device = self.device.clone();
+                let fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>> =
+                    Box::pin(async move {
+                        let state = device.tdisp_tdi_state().await;
+                        if state == TdispTdiState::Uninitialized
+                            || state == TdispTdiState::Unlocked
+                        {
+                            device.write_cfg(offset, value);
+                        } else {
+                            // Unbind first; the cfg write must not happen
+                            // while the device is still bound/running.
+                            device.tdisp_on_device_deactivate().await;
+                            // Write to the command register after the
+                            // unbind regardless of its outcome.
+                            device.write_cfg(offset, value);
+                        }
+                    });
+
+                tracing::info!(
+                    offset,
+                    value,
+                    mmio_enabled = false,
+                    "dispatching deferred STATUS_COMMAND write for TDISP notification"
+                );
+
+                self.pending = Some((write, fut));
+                self.waker.wake_by_ref();
+                IoResult::Defer(token)
+            }
+            None => {
+                self.device.write_cfg(offset, value);
+                IoResult::Ok
+            }
         }
-        IoResult::Ok
     }
 }
 
