@@ -8713,6 +8713,7 @@ dependencies = [
  "chipset_device",
  "guestmem",
  "inspect",
+ "membacking",
  "memory_range",
  "mesh",
  "pal_async",
