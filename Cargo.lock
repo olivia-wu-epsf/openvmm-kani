@@ -8658,6 +8658,7 @@ dependencies = [
  "inspect_counters",
  "libc",
  "mesh",
+ "nix 0.30.1",
  "pal_async",
  "pal_event",
  "parking_lot",
@@ -8735,6 +8736,7 @@ dependencies = [
  "membacking",
  "memory_range",
  "mesh",
+ "nix 0.30.1",
  "pal_async",
  "pci_core",
  "pci_resources",
@@ -8767,6 +8769,7 @@ dependencies = [
  "memory_range",
  "nix 0.30.1",
  "pal_async",
+ "tracelimit",
  "tracing",
  "vfio-bindings",
 ]
