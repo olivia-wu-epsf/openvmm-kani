@@ -19,6 +19,9 @@ use prost as _;
 mod errorcode;
 pub use errorcode::*;
 
+#[cfg(kani)]
+mod kani_proofs;
+
 use crate::guest_to_host_command::Command;
 use crate::guest_to_host_response::Response;
 

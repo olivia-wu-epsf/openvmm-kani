@@ -134,3 +134,54 @@ pub fn deserialize_tdi_report(data: &[u8]) -> anyhow::Result<TdiReportStruct> {
         mmio_interface_info: read_mmio_elems.0.to_vec(),
     })
 }
+
+/// Kani-only sibling of [`deserialize_tdi_report`].
+///
+/// # Why this exists
+/// The production [`deserialize_tdi_report`] returns
+/// `anyhow::Result<TdiReportStruct>` and uses `anyhow::anyhow!("... {e:?}")`
+/// to wrap zerocopy errors. CBMC's reachability analysis includes the
+/// failure paths even on the success path, dragging
+/// `Backtrace::capture()` → `std::env::var()` →
+/// `core::slice::memchr::memchr_naive` into the goto-program (see
+/// `kani-harness-debug` skill anti-pattern #1). The production function
+/// also ends with two `to_vec()` calls that allocate `Vec`s of
+/// symbolic length on the success path, which CBMC must model.
+///
+/// # What this preserves
+/// **The exact zerocopy parsing logic that the no-panic property is
+/// about:**
+///
+/// 1. Same `TdiReportStructSerialized::read_from_prefix(data)` call —
+///    this is the fixed-header parse that must not panic on a too-short
+///    buffer.
+/// 2. Same `<[TdispTdiReportMmioInterfaceInfo]>::ref_from_prefix_with_elems(
+///    variable_portion_offset, report.mmio_range_count as usize)` call —
+///    this is the variable-length parse that must not panic on
+///    adversarial `mmio_range_count` values.
+///
+/// If either zerocopy call would panic on some input, this sibling
+/// would also panic — so the no-panic property is fully preserved.
+///
+/// # What this abstracts
+/// - Error payload: `()` instead of `anyhow::Error`. The harness only
+///   checks reaching the post-parse assertion, never inspects the error.
+/// - Returned struct: `usize` (the parsed `mmio_range_count` echoed back)
+///   instead of the full `TdiReportStruct`. The harness only checks the
+///   number of successfully-decoded MMIO entries against the buffer
+///   size; it does not inspect the bitfield contents.
+/// - The two `to_vec()` allocations at the end (irrelevant to no-panic).
+#[cfg(kani)]
+pub fn deserialize_tdi_report_kani(data: &[u8]) -> Result<usize, ()> {
+    let report_header = TdiReportStructSerialized::read_from_prefix(data).map_err(|_| ())?;
+    let variable_portion_offset = report_header.1;
+    let report = report_header.0;
+
+    let read_mmio_elems = <[TdispTdiReportMmioInterfaceInfo]>::ref_from_prefix_with_elems(
+        variable_portion_offset,
+        report.mmio_range_count as usize,
+    )
+    .map_err(|_| ())?;
+
+    Ok(read_mmio_elems.0.len())
+}

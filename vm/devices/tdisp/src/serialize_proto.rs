@@ -113,3 +113,97 @@ pub fn validate_response(response: &GuestToHostResponse) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Kani-only sibling of [`validate_command`].
+///
+/// # Why this exists
+/// `validate_command` and the `require_field!` / `require_enum!` macros it
+/// uses build `anyhow::Error` values via `anyhow::anyhow!(...)` on every
+/// failure path. CBMC's reachability analysis includes those failure paths
+/// in the goto program even when our harness `kani::assume`s only valid
+/// inputs, which drags `Backtrace::capture()` → `std::env::var()` →
+/// `core::slice::memchr::memchr_naive` into the model and unwinds memchr
+/// for thousands of iterations. (See the doc comment on
+/// [`crate::TdispHostStateMachine::transition_state_to_kani`] for the full
+/// chain.)
+///
+/// # What this preserves
+/// Line-by-line copy of [`validate_command`]'s decision logic:
+///
+/// 1. `command.command.is_some()` — same `require_field!` semantics.
+/// 2. For each oneof variant carrying a discriminant field, the same
+///    "is the i32 a valid `from_i32` discriminant?" check, expressed as
+///    `<EnumType>::from_i32(...).is_some()`.
+///
+/// The decision boundary (which inputs are accepted vs rejected) is
+/// **bit-identical** to production.
+///
+/// # What this abstracts
+/// - Error payload (`()` instead of `anyhow::Error`). The harness only
+///   checks `is_ok()` / `is_err()`, never inspects the payload string.
+#[cfg(kani)]
+pub fn validate_command_kani(command: &GuestToHostCommand) -> Result<(), ()> {
+    if command.command.is_none() {
+        return Err(());
+    }
+    if let Some(Command::GetDeviceInterfaceInfo(req)) = &command.command {
+        if TdispGuestProtocolType::from_i32(req.guest_protocol_type).is_none() {
+            return Err(());
+        }
+    } else if let Some(Command::GetTdiReport(req)) = &command.command {
+        if TdispReportType::from_i32(req.report_type).is_none() {
+            return Err(());
+        }
+    } else if let Some(Command::Unbind(req)) = &command.command {
+        if TdispGuestUnbindReason::from_i32(req.unbind_reason).is_none() {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+/// Kani-only sibling of [`validate_response`]. Same rationale as
+/// [`validate_command_kani`]: the production function uses
+/// `anyhow::anyhow!(...)` on every failure path, which is incidental
+/// to the property under proof but defeats CBMC.
+///
+/// # What this preserves
+/// Line-by-line copy of [`validate_response`]'s decision logic:
+///
+/// 1. Three `from_i32` range checks for `result`, `tdi_state_before`,
+///    `tdi_state_after`.
+/// 2. If `result == Success`: `response.is_some()` check.
+/// 3. If response is `GetTdiReport`: report-type discriminant check
+///    plus non-empty `report_buffer` check.
+/// 4. If response is `GetDeviceInterfaceInfo`: `interface_info.is_some()`
+///    check.
+#[cfg(kani)]
+pub fn validate_response_kani(response: &GuestToHostResponse) -> Result<(), ()> {
+    if TdispGuestOperationErrorCode::from_i32(response.result).is_none() {
+        return Err(());
+    }
+    if TdispTdiState::from_i32(response.tdi_state_before).is_none() {
+        return Err(());
+    }
+    if TdispTdiState::from_i32(response.tdi_state_after).is_none() {
+        return Err(());
+    }
+    if response.result == TdispGuestOperationErrorCode::Success as i32 {
+        if response.response.is_none() {
+            return Err(());
+        }
+        if let Some(Response::GetTdiReport(req)) = &response.response {
+            if TdispReportType::from_i32(req.report_type).is_none() {
+                return Err(());
+            }
+            if req.report_buffer.is_empty() {
+                return Err(());
+            }
+        } else if let Some(Response::GetDeviceInterfaceInfo(req)) = &response.response {
+            if req.interface_info.is_none() {
+                return Err(());
+            }
+        }
+    }
+    Ok(())
+}
