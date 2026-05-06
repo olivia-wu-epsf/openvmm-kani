@@ -40,10 +40,125 @@ pub mod devicereport;
 #[cfg(test)]
 mod tests;
 
+#[cfg(kani)]
+mod kani_proofs;
+
 /// Mocks for the host interface and the emulator.
 pub mod test_helpers;
 
-use anyhow::Context;
+// ----------------------------------------------------------------------------
+// Error shim.
+//
+// Under normal builds, error construction in this crate uses `anyhow`
+// (`anyhow::anyhow!`, `anyhow::Result`, `anyhow::Context::context`)
+// for rich diagnostic messages and backtraces.
+//
+// Under Kani, those `anyhow` paths are unusable: every
+// `anyhow::anyhow!(...)` site expands to `Backtrace::capture()` →
+// `getenv("RUST_BACKTRACE")` → `core::slice::memchr::memchr_naive`,
+// which CBMC cannot bound on a symbolic-length C string. Verification
+// then never terminates (see
+// `.github/skills/model-checking/SKILL.md`, anti-pattern #1).
+//
+// To keep the production code untouched at the call sites, this
+// crate uses `crate::Error` / `crate::Result` / `crate::Context` /
+// `crate::err!`, which resolve to either the real `anyhow` types or
+// to a unit-like Kani-only stub. The decision predicates and state
+// mutations are unaffected; only the error payload is abstracted.
+#[cfg(not(kani))]
+mod err_shim {
+    pub use anyhow::Context;
+    pub use anyhow::Error;
+    pub use anyhow::Result;
+
+    /// Forwards to [`anyhow::anyhow!`].
+    #[macro_export]
+    macro_rules! err {
+        ($($t:tt)*) => { ::anyhow::anyhow!($($t)*) };
+    }
+}
+
+#[cfg(kani)]
+mod err_shim {
+    /// Kani stand-in for [`anyhow::Error`]. Constructed without
+    /// `Backtrace::capture` / `getenv` / `memchr_naive`, so CBMC can
+    /// fully explore error paths in bounded time.
+    #[derive(Debug)]
+    pub struct Error;
+
+    /// Kani stand-in for [`anyhow::Result`]. Like `anyhow::Result`,
+    /// the error type defaults to [`Error`] but can be overridden so
+    /// that signatures like `Result<(), TdispGuestOperationError>`
+    /// continue to type-check.
+    pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+    /// Kani stand-in for [`anyhow::Context`]. Discards the message
+    /// (which is diagnostic-only) and erases the inner error type.
+    pub trait Context<T, E> {
+        fn context<C>(self, ctx: C) -> Result<T>;
+    }
+
+    impl<T, E> Context<T, E> for core::result::Result<T, E> {
+        fn context<C>(self, _ctx: C) -> Result<T> {
+            self.map_err(|_| Error)
+        }
+    }
+
+    /// Forwarding macro for [`anyhow::anyhow!`] — discards arguments
+    /// (no formatting evaluated, no `core::fmt` or `memchr` chain
+    /// dragged in) and yields a bare [`Error`].
+    #[macro_export]
+    macro_rules! err {
+        ($($t:tt)*) => {{ $crate::Error }};
+    }
+}
+
+pub use err_shim::Context;
+pub use err_shim::Error;
+pub use err_shim::Result;
+
+// ----------------------------------------------------------------------------
+// Tracing shim.
+//
+// Under normal builds, this crate uses the real `tracing` crate for
+// structured logging at every state transition.
+//
+// Under Kani, the real `tracing` crate is not in the dep graph at all
+// (see `Cargo.toml`). Instead, this local `mod tracing` shadows it
+// at the same path so that every `tracing::info!`/`error!`/etc. call
+// site resolves to a no-op macro that discards its arguments at
+// parse time.
+//
+// Why not just `tracing/max_level_off`? That feature strips the
+// macro *bodies* but `tracing-core`'s `Dispatch` thread-local infra
+// is still linked, and CBMC open-endedly recurses through
+// `std::ptr::drop_in_place::<tracing_core::dispatcher::State>` at
+// thread teardown (which transitively drags in
+// `std::backtrace::Backtrace` and `std::io::Error` Drop chains).
+// The shim removes the entire crate from the dep graph so none of
+// that machinery is reachable. See
+// `.github/skills/model-checking/SKILL.md`, anti-patterns #5 and #6.
+//
+// The `#[instrument]` attribute is NOT shimmed here; it is gated
+// per-site with `#[cfg_attr(not(kani), instrument(...))]`. (A
+// proc-macro attribute cannot be replaced by `macro_rules!`.)
+#[cfg(kani)]
+mod tracing {
+    /// No-op stand-in for [`::tracing::info!`]. Discards arguments
+    /// at parse time — no `core::fmt`, no event construction, no
+    /// `Dispatch` lookup.
+    #[macro_export]
+    macro_rules! __tdisp_kani_tracing_noop {
+        ($($t:tt)*) => {};
+    }
+
+    pub use crate::__tdisp_kani_tracing_noop as info;
+    pub use crate::__tdisp_kani_tracing_noop as error;
+    pub use crate::__tdisp_kani_tracing_noop as warn;
+    pub use crate::__tdisp_kani_tracing_noop as debug;
+    pub use crate::__tdisp_kani_tracing_noop as trace;
+}
+
 use parking_lot::Mutex;
 use std::sync::Arc;
 pub use tdisp_proto::GuestToHostCommand;
@@ -65,35 +180,42 @@ pub use tdisp_proto::TdispTdiState;
 pub use tdisp_proto::guest_to_host_command::Command;
 pub use tdisp_proto::guest_to_host_response::Response;
 
+#[cfg(not(kani))]
 use tracing::instrument;
 
 /// Callback for receiving TDISP commands from the guest.
-pub type TdispCommandCallback = dyn Fn(&GuestToHostCommand) -> anyhow::Result<()> + Send + Sync;
+pub type TdispCommandCallback = dyn Fn(&GuestToHostCommand) -> crate::Result<()> + Send + Sync;
 
 /// Describes the interface that host software should implement to provide TDISP
 /// functionality for a device. These interfaces might dispatch to a physical
 /// device, or might be implemented by a software emulator.
+///
+/// The result types are spelled with the crate-local [`crate::Result`]
+/// alias so that the error type is swappable under Kani (see the
+/// `err_shim` module above). Under normal builds `crate::Result<T>`
+/// is identical to `anyhow::Result<T>`, so external implementors may
+/// continue to spell their signatures with either alias
+/// interchangeably.
 pub trait TdispHostDeviceInterface: Send + Sync {
     /// Request versioning and protocol negotiation from the host.
     fn tdisp_negotiate_protocol(
         &mut self,
         _requested_guest_protocol: TdispGuestProtocolType,
-    ) -> anyhow::Result<TdispDeviceInterfaceInfo>;
+    ) -> crate::Result<TdispDeviceInterfaceInfo>;
 
     /// Bind a tdi device to the current partition. Transitions device to the Locked
     /// state from Unlocked.
-    fn tdisp_bind_device(&mut self) -> anyhow::Result<()>;
+    fn tdisp_bind_device(&mut self) -> crate::Result<()>;
 
     /// Start a bound device by transitioning it to the Run state from the Locked state.
     /// This allows attestation and resources to be accepted into the guest context.
-    fn tdisp_start_device(&mut self) -> anyhow::Result<()>;
+    fn tdisp_start_device(&mut self) -> crate::Result<()>;
 
     /// Unbind a tdi device from the current partition.
-    fn tdisp_unbind_device(&mut self) -> anyhow::Result<()>;
+    fn tdisp_unbind_device(&mut self) -> crate::Result<()>;
 
     /// Get a device interface report for the device.
-    fn tdisp_get_device_report(&mut self, _report_type: TdispReportType)
-    -> anyhow::Result<Vec<u8>>;
+    fn tdisp_get_device_report(&mut self, _report_type: TdispReportType) -> crate::Result<Vec<u8>>;
 }
 
 /// Trait added to host virtual devices to dispatch TDISP commands from guests.
@@ -198,7 +320,7 @@ impl TdispHostDeviceTarget for TdispHostDeviceTargetEmulator {
     /// Main entry point for handling a guest command sent to the host.
     /// Dispatches relevant trait interface methods to handle the command.
     /// Formats and returns a response packet.
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
     fn tdisp_handle_guest_command(
         &mut self,
         command: GuestToHostCommand,
@@ -331,13 +453,13 @@ const TDISP_STATE_HISTORY_LEN: usize = 10;
 #[derive(Debug)]
 pub enum TdispUnbindReason {
     /// Unknown reason.
-    Unknown(anyhow::Error),
+    Unknown(crate::Error),
 
     /// The device was unbound manually by the guest or host for a non-error reason.
     GuestInitiated(TdispGuestUnbindReason),
 
     /// The device attempted to perform an invalid state transition.
-    ImpossibleStateTransition(anyhow::Error),
+    ImpossibleStateTransition(crate::Error),
 
     /// The guest tried to transition the device to the Locked state while the device was not
     /// in the Unlocked state.
@@ -358,7 +480,7 @@ pub enum TdispUnbindReason {
     /// The guest tried to unbind the device while the device with an unbind reason that is
     /// not recognized as a valid guest unbind reason. The unbind still succeeds but the
     /// recorded reason is discarded.
-    InvalidGuestUnbindReason(anyhow::Error),
+    InvalidGuestUnbindReason(crate::Error),
 }
 
 /// The state machine for the TDISP assignment flow for a device on the host. Both the guest and host
@@ -396,17 +518,39 @@ impl TdispHostStateMachine {
         self.debug_device_id = debug_device_id;
     }
 
+    /// Kani-only: directly set the internal `current_state` and
+    /// `guest_protocol_type` so a harness can begin verification
+    /// from an unconstrained (symbolic) starting state. Real
+    /// production code never invokes this — the state machine
+    /// always starts in `(Unlocked, Invalid)` after [`Self::new`].
+    #[cfg(kani)]
+    pub fn kani_set_internal_state(
+        &mut self,
+        current_state: TdispTdiState,
+        guest_protocol_type: TdispGuestProtocolType,
+    ) {
+        self.current_state = current_state;
+        self.guest_protocol_type = guest_protocol_type;
+    }
+
+    /// Kani-only: read the internal `guest_protocol_type` so a
+    /// harness can assert monotonicity / no-downgrade properties.
+    #[cfg(kani)]
+    pub fn kani_guest_protocol_type(&self) -> TdispGuestProtocolType {
+        self.guest_protocol_type
+    }
+
     /// Get the current state of the TDI.
     fn state(&self) -> TdispTdiState {
         self.current_state
     }
 
-    fn ensure_negotiated_protocol(&self) -> anyhow::Result<()> {
+    fn ensure_negotiated_protocol(&self) -> crate::Result<()> {
         if self.guest_protocol_type == TdispGuestProtocolType::Invalid {
             tracing::error!(
                 "Guest tried to perform a state transition without negotiating a protocol with the host!"
             );
-            return Err(anyhow::anyhow!(
+            return Err(crate::err!(
                 "Guest tried to perform a state transition without negotiating a protocol with the host!"
             ));
         }
@@ -416,7 +560,7 @@ impl TdispHostStateMachine {
     /// Check if the state machine can transition to the new state. This protects the underlying state machinery
     /// while higher level transition machinery tries to avoid these conditions. If the new state is impossible,
     /// `false` is returned.
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
     fn is_valid_state_transition(&self, new_state: &TdispTdiState) -> bool {
         // All state machine transitions are specifically denied until the host as negotiated a protocol.
         match self.ensure_negotiated_protocol() {
@@ -444,8 +588,8 @@ impl TdispHostStateMachine {
 
     /// Transitions the state machine to the new state if it is valid. If the new state is invalid,
     /// the state of the device is reset to the `Unlocked` state.
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
-    fn transition_state_to(&mut self, new_state: TdispTdiState) -> anyhow::Result<()> {
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
+    fn transition_state_to(&mut self, new_state: TdispTdiState) -> crate::Result<()> {
         tracing::info!(
             "Request to transition from {:?} -> {:?}",
             self.current_state,
@@ -459,7 +603,7 @@ impl TdispHostStateMachine {
                 self.current_state,
                 new_state
             );
-            return Err(anyhow::anyhow!(
+            return Err(crate::err!(
                 "Invalid state transition {:?} -> {:?}",
                 self.current_state,
                 new_state
@@ -480,14 +624,14 @@ impl TdispHostStateMachine {
     }
 
     /// Transition the device to the `Unlocked` state regardless of the current state.
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
-    fn unbind_all(&mut self, reason: TdispUnbindReason) -> anyhow::Result<()> {
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
+    fn unbind_all(&mut self, reason: TdispUnbindReason) -> crate::Result<()> {
         tracing::info!("Unbind called with reason {:?}", reason);
 
         // All states can be reset to the Unlocked state. This can only happen if the
         // state is corrupt beyond the state machine.
         if let Err(reason) = self.transition_state_to(TdispTdiState::Unlocked) {
-            return Err(anyhow::anyhow!(
+            return Err(crate::err!(
                 "Impossible state machine violation during TDISP Unbind: {:?}",
                 reason
             ));
@@ -580,7 +724,7 @@ pub trait TdispGuestRequestInterface {
 
 impl TdispGuestRequestInterface for TdispHostStateMachine {
     /// Request versioning and protocol negotiation from the host.
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
     fn tdisp_negotiate_protocol(
         &mut self,
         requested_guest_protocol: TdispGuestProtocolType,
@@ -641,7 +785,7 @@ impl TdispGuestRequestInterface for TdispHostStateMachine {
         }
     }
 
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
     fn request_lock_device_resources(&mut self) -> Result<(), TdispGuestOperationError> {
         // Ensure the guest protocol is negotiated.
         self.ensure_negotiated_protocol()
@@ -684,7 +828,7 @@ impl TdispGuestRequestInterface for TdispHostStateMachine {
         Ok(())
     }
 
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
     fn request_start_tdi(&mut self) -> Result<(), TdispGuestOperationError> {
         // Ensure the guest protocol is negotiated.
         self.ensure_negotiated_protocol()
@@ -724,7 +868,7 @@ impl TdispGuestRequestInterface for TdispHostStateMachine {
         Ok(())
     }
 
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
     fn request_attestation_report(
         &mut self,
         report_type: TdispReportType,
@@ -766,7 +910,7 @@ impl TdispGuestRequestInterface for TdispHostStateMachine {
         }
     }
 
-    #[instrument(fields(device_id = %self.debug_device_id), skip(self))]
+    #[cfg_attr(not(kani), instrument(fields(device_id = %self.debug_device_id), skip(self)))]
     fn request_unbind(
         &mut self,
         reason: TdispGuestUnbindReason,
@@ -789,7 +933,7 @@ impl TdispGuestRequestInterface for TdispHostStateMachine {
                     "Invalid guest unbind reason {} requested",
                     reason.as_str_name()
                 );
-                TdispUnbindReason::InvalidGuestUnbindReason(anyhow::anyhow!(
+                TdispUnbindReason::InvalidGuestUnbindReason(crate::err!(
                     "Invalid guest unbind reason {} requested",
                     reason.as_str_name()
                 ))

@@ -10,11 +10,23 @@ rust-version.workspace = true
 anyhow.workspace = true
 parking_lot.workspace = true
 prost.workspace = true
-tracing.workspace = true
 tdisp_proto.workspace = true
 bitfield-struct.workspace = true
 zerocopy.workspace = true
 static_assertions.workspace = true
+
+# `tracing` is only linked under non-Kani builds. Under Kani, the
+# crate provides its own no-op `mod tracing` shim (see `lib.rs`) so
+# that `tracing-core`'s `Dispatch` thread-local infrastructure is
+# never compiled in. Without this, CBMC open-endedly recurses through
+# `std::ptr::drop_in_place::<tracing_core::dispatcher::State>` at
+# thread teardown — a chain that pulls in `std::backtrace::Backtrace`
+# and `std::io::Error` Drop, dominating reachability and causing
+# multi-call harnesses (e.g. negotiate-then-bind) to time out. The
+# `tracing/max_level_off` feature alone strips the macro bodies but
+# does NOT prevent the dispatcher TLS from being linked.
+[target.'cfg(not(kani))'.dependencies]
+tracing.workspace = true
 
 [lints]
 workspace = true
