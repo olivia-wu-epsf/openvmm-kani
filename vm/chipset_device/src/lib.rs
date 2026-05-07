@@ -77,9 +77,7 @@ pub trait ChipsetDevice: 'static + Send /* see DEVNOTE before adding bounds */ {
     /// (and therefore trigger the "no reporter" reply path on the
     /// guest-facing VPCI server).
     #[inline(always)]
-    fn supports_tdisp_isolation(
-        &mut self,
-    ) -> Option<&mut dyn tdisp::TdispIsolationReporter> {
+    fn supports_tdisp_isolation(&mut self) -> Option<&mut dyn tdisp::TdispIsolationReporter> {
         None
     }
 }

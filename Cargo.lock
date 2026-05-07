@@ -10258,7 +10258,6 @@ dependencies = [
  "futures-concurrency",
  "guestmem",
  "guid",
- "hcl",
  "hvdef",
  "inspect",
  "mesh",

@@ -1,0 +1,690 @@
+Kani Rust Verifier 0.67.0 (cargo plugin)
+[Kani] Running: `CARGO_ENCODED_RUSTFLAGS="-Coverflow-checks=on-Zunstable-options-Ztrim-diagnostic-paths=no-Zhuman_readable_cgu_names-Zalways-encode-mir--cfg=kani-Zcrate-attr=feature(register_tool)-Zcrate-attr=register_tool(kanitool)--sysroot/home/vscode/.kani/kani-0.67.0-L/home/vscode/.kani/kani-0.67.0/lib--externkani--externnoprelude:std=/home/vscode/.kani/kani-0.67.0/lib/libstd.rlib-Cpanic=abort-Csymbol-mangling-version=v0-Zpanic_abort_tests=yes-Zmir-enable-passes=-RemoveStorageMarkers--check-cfg=cfg(kani)-Clinker=echo--kani-compiler-Cllvm-args=--check-version=0.67.0" CARGO_TERM_PROGRESS_WHEN="never" RUSTC="/home/vscode/.kani/kani-0.67.0/bin/kani-compiler" RUSTC_BOOTSTRAP="1" /home/vscode/.kani/kani-0.67.0/toolchain/bin/cargo rustc --target x86_64-unknown-linux-gnu -Zhost-config -Ztarget-applies-to-host --config=host.rustflags=["--cfg=kani_host"] --target-dir /workspaces/openvmm/target/kani --message-format json-diagnostic-rendered-ansi -v -p path+file:///workspaces/openvmm/vm/devices/tdisp#0.0.0 --lib -- "-Cllvm-args=--reachability=harnesses --log-level=info --assertion-reach-checks --harness verify_reconcile_host_claim_safety"`
+       Fresh unicode-ident v1.0.18
+       Fresh either v1.15.0
+       Fresh bitflags v2.9.3
+       Fresh linux-raw-sys v0.9.4
+       Fresh linux-raw-sys v0.4.15
+       Fresh equivalent v1.0.2
+       Fresh autocfg v1.5.0
+       Fresh regex-syntax v0.8.6
+       Fresh proc-macro2 v1.0.101
+       Fresh itertools v0.10.5
+       Fresh hashbrown v0.15.5
+       Fresh regex-automata v0.4.14
+       Fresh home v0.5.11
+       Fresh once_cell v1.21.3
+       Fresh fastrand v2.3.0
+       Fresh fixedbitset v0.4.2
+       Fresh quote v1.0.40
+       Fresh rustix v1.0.8
+       Fresh rustix v0.38.44
+       Fresh indexmap v2.11.0
+       Fresh regex v1.12.3
+       Fresh lazy_static v1.5.0
+       Fresh scopeguard v1.2.0
+       Fresh multimap v0.8.3
+       Fresh cfg-if v1.0.3
+       Fresh heck v0.4.1
+       Fresh smallvec v1.15.1
+       Fresh log v0.4.27
+       Fresh heck v0.5.0
+       Fresh syn v1.0.109
+       Fresh syn v2.0.106
+       Fresh getrandom v0.3.3
+       Fresh libc v0.2.184
+       Fresh petgraph v0.6.5
+       Fresh which v4.4.2
+       Fresh lock_api v0.4.13
+       Fresh bytes v1.11.1
+       Fresh static_assertions v1.1.0
+       Fresh prost-derive v0.11.9
+       Fresh tempfile v3.21.0
+       Fresh prettyplease v0.1.25
+       Fresh parking_lot_core v0.9.11
+       Fresh thiserror-impl v2.0.16
+       Fresh bitfield-struct v0.11.0
+       Fresh inspect_derive v0.0.0 (/workspaces/openvmm/support/inspect_derive)
+       Fresh zerocopy-derive v0.8.27
+       Fresh anyhow v1.0.99
+       Fresh parking_lot v0.12.4
+       Fresh prost v0.11.9
+       Fresh thiserror v2.0.16
+       Fresh zerocopy v0.8.27
+       Fresh prost-types v0.11.9
+       Fresh inspect v0.0.0 (/workspaces/openvmm/support/inspect)
+       Fresh prost-build v0.11.9
+       Dirty tdisp_proto v0.0.0 (/workspaces/openvmm/vm/devices/tdisp_proto): the precalculated components changed
+   Compiling tdisp_proto v0.0.0 (/workspaces/openvmm/vm/devices/tdisp_proto)
+     Running `/workspaces/openvmm/target/kani/debug/build/tdisp_proto-22d6b7c17d4e3b18/build-script-build`
+     Running `/home/vscode/.kani/kani-0.67.0/bin/kani-compiler --crate-name tdisp_proto --edition=2024 vm/devices/tdisp_proto/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C panic=abort -C embed-bitcode=no -C debuginfo=2 --warn=rust_2018_idioms --deny=future_incompatible --warn=unused_qualifications --forbid=unsafe_op_in_unsafe_fn --deny=unsafe_code '--warn=clippy::unnecessary_box_returns' '--allow=clippy::uninlined_format_args' --warn=unexpected_cfgs '--warn=clippy::undocumented_unsafe_blocks' '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--warn=clippy::suboptimal_flops' '--allow=clippy::single_range_in_vec_init' '--warn=clippy::rest_pat_in_fully_bound_structs' '--warn=clippy::ref_option_ref' '--warn=clippy::ref_as_ptr' '--warn=clippy::ptr_cast_constness' '--warn=clippy::ptr_as_ptr' '--warn=clippy::option_option' '--allow=clippy::new_without_default' --warn=missing_docs '--allow=clippy::manual_flatten' '--warn=clippy::macro_use_imports' '--warn=clippy::lossy_float_literal' '--warn=clippy::linkedlist' '--allow=clippy::len_without_is_empty' '--warn=clippy::inefficient_to_string' '--warn=clippy::imprecise_flops' '--warn=clippy::implicit_clone' '--warn=clippy::fn_params_excessive_bools' '--warn=clippy::filter_map_next' '--warn=clippy::debug_assert_with_mut_call' '--warn=clippy::dbg_macro' '--allow=clippy::collapsible_match' '--allow=clippy::collapsible_if' '--allow=clippy::collapsible_else_if' '--allow=clippy::box_default' '--allow=clippy::bool_assert_comparison' '--warn=clippy::allow_attributes' --check-cfg 'cfg(trick_rust_analyzer_into_highlighting_interpolated_bits)' --check-cfg 'cfg(kani)' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=1312464850540b60 -C extra-filename=-c7fb87ef670783ca --out-dir /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps --target x86_64-unknown-linux-gnu -C incremental=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/incremental -L dependency=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps -L dependency=/workspaces/openvmm/target/kani/debug/deps --extern inspect=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libinspect-ca582d06ef0bd593.rmeta --extern prost=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libprost-e7a7e2420c8d7a58.rmeta --extern thiserror=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libthiserror-5f0a4228a41cbbf8.rmeta -C overflow-checks=on -Z unstable-options -Z trim-diagnostic-paths=no -Z human_readable_cgu_names -Z always-encode-mir --cfg=kani -Z 'crate-attr=feature(register_tool)' -Z 'crate-attr=register_tool(kanitool)' --sysroot /home/vscode/.kani/kani-0.67.0 -L /home/vscode/.kani/kani-0.67.0/lib --extern kani --extern 'noprelude:std=/home/vscode/.kani/kani-0.67.0/lib/libstd.rlib' -C panic=abort -C symbol-mangling-version=v0 -Z panic_abort_tests=yes -Z mir-enable-passes=-RemoveStorageMarkers '--check-cfg=cfg(kani)' -Clinker=echo --kani-compiler -Cllvm-args=--check-version=0.67.0`
+   Compiling tdisp v0.0.0 (/workspaces/openvmm/vm/devices/tdisp)
+     Running `/home/vscode/.kani/kani-0.67.0/bin/kani-compiler --crate-name tdisp --edition=2024 vm/devices/tdisp/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C panic=abort -C embed-bitcode=no -C debuginfo=2 --warn=rust_2018_idioms --deny=future_incompatible --warn=unused_qualifications --forbid=unsafe_op_in_unsafe_fn --deny=unsafe_code '--warn=clippy::unnecessary_box_returns' '--allow=clippy::uninlined_format_args' --warn=unexpected_cfgs '--warn=clippy::undocumented_unsafe_blocks' '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--warn=clippy::suboptimal_flops' '--allow=clippy::single_range_in_vec_init' '--warn=clippy::rest_pat_in_fully_bound_structs' '--warn=clippy::ref_option_ref' '--warn=clippy::ref_as_ptr' '--warn=clippy::ptr_cast_constness' '--warn=clippy::ptr_as_ptr' '--warn=clippy::option_option' '--allow=clippy::new_without_default' --warn=missing_docs '--allow=clippy::manual_flatten' '--warn=clippy::macro_use_imports' '--warn=clippy::lossy_float_literal' '--warn=clippy::linkedlist' '--allow=clippy::len_without_is_empty' '--warn=clippy::inefficient_to_string' '--warn=clippy::imprecise_flops' '--warn=clippy::implicit_clone' '--warn=clippy::fn_params_excessive_bools' '--warn=clippy::filter_map_next' '--warn=clippy::debug_assert_with_mut_call' '--warn=clippy::dbg_macro' '--allow=clippy::collapsible_match' '--allow=clippy::collapsible_if' '--allow=clippy::collapsible_else_if' '--allow=clippy::box_default' '--allow=clippy::bool_assert_comparison' '--warn=clippy::allow_attributes' --check-cfg 'cfg(trick_rust_analyzer_into_highlighting_interpolated_bits)' --check-cfg 'cfg(kani)' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=f4e02b49dee57a78 -C extra-filename=-4b88fb22b598d1e6 --out-dir /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps --target x86_64-unknown-linux-gnu -C incremental=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/incremental -L dependency=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps -L dependency=/workspaces/openvmm/target/kani/debug/deps --extern anyhow=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libanyhow-1c02b152fc1db43a.rmeta --extern bitfield_struct=/workspaces/openvmm/target/kani/debug/deps/libbitfield_struct-b24793b8dc977a34.so --extern parking_lot=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libparking_lot-efe9d0b0d1d512dd.rmeta --extern prost=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libprost-e7a7e2420c8d7a58.rmeta --extern static_assertions=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libstatic_assertions-82080f5237a49c49.rmeta --extern tdisp_proto=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libtdisp_proto-c7fb87ef670783ca.rmeta --extern zerocopy=/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/libzerocopy-3fbbcf320cb9ff9c.rmeta '-Cllvm-args=--reachability=harnesses --log-level=info --assertion-reach-checks --harness verify_reconcile_host_claim_safety' -C overflow-checks=on -Z unstable-options -Z trim-diagnostic-paths=no -Z human_readable_cgu_names -Z always-encode-mir --cfg=kani -Z 'crate-attr=feature(register_tool)' -Z 'crate-attr=register_tool(kanitool)' --sysroot /home/vscode/.kani/kani-0.67.0 -L /home/vscode/.kani/kani-0.67.0/lib --extern kani --extern 'noprelude:std=/home/vscode/.kani/kani-0.67.0/lib/libstd.rlib' -C panic=abort -C symbol-mangling-version=v0 -Z panic_abort_tests=yes -Z mir-enable-passes=-RemoveStorageMarkers '--check-cfg=cfg(kani)' -Clinker=echo --kani-compiler -Cllvm-args=--check-version=0.67.0`
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/reconcile.rs:103:6
+    |
+103 | ) -> core::result::Result<TdispTdiState, HostClaimRejection> {
+    |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: requested on the command line with `-W unused-qualifications`
+help: remove the unnecessary path segments
+    |
+103 - ) -> core::result::Result<TdispTdiState, HostClaimRejection> {
+103 + ) -> Result<TdispTdiState, HostClaimRejection> {
+    |
+
+warning: unused import: `crate::TdispHostDeviceTargetEmulator`
+  --> vm/devices/tdisp/src/test_helpers.rs:5:5
+   |
+ 5 | use crate::TdispHostDeviceTargetEmulator;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: if this is a test module, consider adding a `#[cfg(test)]` to the containing module
+  --> vm/devices/tdisp/src/lib.rs:52:1
+   |
+52 | pub mod test_helpers;
+   | ^^^^^^^^^^^^^^^^^^^^^
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `crate::__tdisp_kani_tracing_noop as warn`
+   --> vm/devices/tdisp/src/lib.rs:162:13
+    |
+162 |     pub use crate::__tdisp_kani_tracing_noop as warn;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::__tdisp_kani_tracing_noop as debug`
+   --> vm/devices/tdisp/src/lib.rs:163:13
+    |
+163 |     pub use crate::__tdisp_kani_tracing_noop as debug;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::__tdisp_kani_tracing_noop as trace`
+   --> vm/devices/tdisp/src/lib.rs:164:13
+    |
+164 |     pub use crate::__tdisp_kani_tracing_noop as trace;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:192:64
+    |
+192 | pub type TdispCommandCallback = dyn Fn(&GuestToHostCommand) -> crate::Result<()> + Send + Sync;
+    |                                                                ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+192 - pub type TdispCommandCallback = dyn Fn(&GuestToHostCommand) -> crate::Result<()> + Send + Sync;
+192 + pub type TdispCommandCallback = dyn Fn(&GuestToHostCommand) -> Result<()> + Send + Sync;
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:209:10
+    |
+209 |     ) -> crate::Result<TdispDeviceInterfaceInfo>;
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+209 -     ) -> crate::Result<TdispDeviceInterfaceInfo>;
+209 +     ) -> Result<TdispDeviceInterfaceInfo>;
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:213:40
+    |
+213 |     fn tdisp_bind_device(&mut self) -> crate::Result<()>;
+    |                                        ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+213 -     fn tdisp_bind_device(&mut self) -> crate::Result<()>;
+213 +     fn tdisp_bind_device(&mut self) -> Result<()>;
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:217:41
+    |
+217 |     fn tdisp_start_device(&mut self) -> crate::Result<()>;
+    |                                         ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+217 -     fn tdisp_start_device(&mut self) -> crate::Result<()>;
+217 +     fn tdisp_start_device(&mut self) -> Result<()>;
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:220:42
+    |
+220 |     fn tdisp_unbind_device(&mut self) -> crate::Result<()>;
+    |                                          ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+220 -     fn tdisp_unbind_device(&mut self) -> crate::Result<()>;
+220 +     fn tdisp_unbind_device(&mut self) -> Result<()>;
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:223:77
+    |
+223 |     fn tdisp_get_device_report(&mut self, _report_type: TdispReportType) -> crate::Result<Vec<u8>>;
+    |                                                                             ^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+223 -     fn tdisp_get_device_report(&mut self, _report_type: TdispReportType) -> crate::Result<Vec<u8>>;
+223 +     fn tdisp_get_device_report(&mut self, _report_type: TdispReportType) -> Result<Vec<u8>>;
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:461:13
+    |
+461 |     Unknown(crate::Error),
+    |             ^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+461 -     Unknown(crate::Error),
+461 +     Unknown(Error),
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:467:31
+    |
+467 |     ImpossibleStateTransition(crate::Error),
+    |                               ^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+467 -     ImpossibleStateTransition(crate::Error),
+467 +     ImpossibleStateTransition(Error),
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:488:30
+    |
+488 |     InvalidGuestUnbindReason(crate::Error),
+    |                              ^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+488 -     InvalidGuestUnbindReason(crate::Error),
+488 +     InvalidGuestUnbindReason(Error),
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:553:45
+    |
+553 |     fn ensure_negotiated_protocol(&self) -> crate::Result<()> {
+    |                                             ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+553 -     fn ensure_negotiated_protocol(&self) -> crate::Result<()> {
+553 +     fn ensure_negotiated_protocol(&self) -> Result<()> {
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:597:68
+    |
+597 |     fn transition_state_to(&mut self, new_state: TdispTdiState) -> crate::Result<()> {
+    |                                                                    ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+597 -     fn transition_state_to(&mut self, new_state: TdispTdiState) -> crate::Result<()> {
+597 +     fn transition_state_to(&mut self, new_state: TdispTdiState) -> Result<()> {
+    |
+
+warning: unnecessary qualification
+   --> vm/devices/tdisp/src/lib.rs:633:60
+    |
+633 |     fn unbind_all(&mut self, reason: TdispUnbindReason) -> crate::Result<()> {
+    |                                                            ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+633 -     fn unbind_all(&mut self, reason: TdispUnbindReason) -> crate::Result<()> {
+633 +     fn unbind_all(&mut self, reason: TdispUnbindReason) -> Result<()> {
+    |
+
+warning: unused variable: `e`
+   --> vm/devices/tdisp/src/lib.rs:573:17
+    |
+573 |             Err(e) => {
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_e`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `reason`
+   --> vm/devices/tdisp/src/lib.rs:638:20
+    |
+638 |         if let Err(reason) = self.transition_state_to(TdispTdiState::Unlocked) {
+    |                    ^^^^^^ help: if this is intentional, prefix it with an underscore: `_reason`
+
+warning: unused variable: `e`
+   --> vm/devices/tdisp/src/lib.rs:786:17
+    |
+786 |             Err(e) => {
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> vm/devices/tdisp/src/lib.rs:820:20
+    |
+820 |         if let Err(e) = res {
+    |                    ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> vm/devices/tdisp/src/lib.rs:828:17
+    |
+828 |             Err(e) => {
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> vm/devices/tdisp/src/lib.rs:859:20
+    |
+859 |         if let Err(e) = res {
+    |                    ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> vm/devices/tdisp/src/lib.rs:867:17
+    |
+867 |             Err(e) => {
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `e`
+   --> vm/devices/tdisp/src/lib.rs:911:17
+    |
+911 |             Err(e) => {
+    |                 ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: missing documentation for a method
+   --> vm/devices/tdisp/src/lib.rs:103:9
+    |
+103 |         fn context<C>(self, ctx: C) -> Result<T>;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: requested on the command line with `-W missing-docs`
+
+INFO kani_compiler::codegen_cprover_gotoc::compiler_interface Finished codegen reachability analysis in 0.000834389s
+INFO kani_compiler::codegen_cprover_gotoc::compiler_interface Finished codegen in 0.02070983s
+====== Reachability Analysis Result =======
+Total # items: 21
+Total # statements: 341
+Total # expressions: 96
+
+Reachable Items:
+  - function: 21
+
+Statements:
+  - Drop: 1
+  - Ignored: 121
+  - Unreachable: 5
+  - Return: 20
+  - Assign: 96
+  - SwitchInt: 16
+  - Goto: 38
+  - Assert: 2
+  - Call: 42
+
+Expressions:
+  - Aggregate: 25
+  - BinaryOp: 8
+  - Use: 32
+  - UnaryOp: 2
+  - Ref: 18
+  - Discriminant: 11
+
+-------------------------------------------
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.11s
+[Kani] Running: `goto-cc /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.symtab.out /home/vscode/.kani/kani-0.67.0/library/kani/kani_lib.c -o /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out`
+Finished goto-cc in 0.08489285s
+[Kani] Running: `goto-cc /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out --function _RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety -o /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out`
+Finished goto-cc in 0.018932045s
+[Kani] Running: `goto-instrument --add-library --no-malloc-may-fail /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out`
+Reading GOTO program from '/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out'
+Adding CPROVER library (x86_64)
+Writing GOTO program to '/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out'
+Finished goto-instrument in 0.03945662s
+[Kani] Running: `goto-instrument --generate-function-body-options assert-false-assume-false --generate-function-body .* --drop-unused-functions /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out`
+Reading GOTO program from '/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out'
+generate function bodies: matched function '__CPROVER_is_freeable' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_assert' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_object_whole' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_assume' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_object_from' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_object_upto' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_cover' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_assignable' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_was_freed' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_freeable' begins with __CPROVER the generated body for this function may interfere with analysis
+Function Pointer Removal
+Virtual function removal
+Cleaning inline assembler statements
+Removing unused functions
+Writing GOTO program to '/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out'
+Finished goto-instrument in 0.02172907s
+[Kani] Running: `goto-instrument --ensure-one-backedge-per-target /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out`
+Reading GOTO program from '/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out'
+Trying to force one backedge per target
+Writing GOTO program to '/workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out'
+Finished goto-instrument in 0.01981365s
+Checking harness kani_proofs::verify_reconcile_host_claim_safety...
+[Kani] Running: `cbmc --no-malloc-may-fail --no-undefined-shift-check --no-signed-overflow-check --nan-check --no-self-loops-to-assumptions --no-pointer-primitive-check --object-bits 16 --sat-solver cadical --slice-formula /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out --verbosity 9 --json-ui`
+CBMC 6.8.0 (cbmc-6.8.0)
+CBMC version 6.8.0 (cbmc-6.8.0) 64-bit x86_64 linux
+Reading GOTO program from file /workspaces/openvmm/target/kani/x86_64-unknown-linux-gnu/debug/deps/tdisp-4b88fb22b598d1e6__RNvNtCs8MXY4eMb1PL_5tdisp11kani_proofs34verify_reconcile_host_claim_safety.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+aborting path on assume(false) at file /home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs line 1338 column 15 function std::option::Option::<tdisp_proto::TdispTdiState>::ok_or::<reconcile::HostClaimRejection> thread 0
+aborting path on assume(false) at file /home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs line 2173 column 15 function <std::result::Result<tdisp_proto::TdispTdiState, reconcile::HostClaimRejection> as std::ops::Try>::branch thread 0
+aborting path on assume(false) at file vm/devices/tdisp/src/lib.rs line 0 column 0 function reconcile::reconcile_host_claim thread 0
+aborting path on assume(false) at file /home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs line 2365 column 15 function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq thread 0
+aborting path on assume(false) at file vm/devices/tdisp/src/kani_proofs.rs line 329 column 15 function kani_proofs::verify_reconcile_host_claim_safety thread 0
+Runtime Symex: 0.0545067s
+size of program expression: 2825 steps
+slicing removed 1860 assignments
+Generated 206 VCC(s), 24 remaining after simplification
+Runtime Postprocess Equation: 0.000883474s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.00468181s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 8.361e-06s
+Solving with CaDiCaL 2.0.0
+3094 variables, 5243 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.00219437s
+Runtime decision procedure: 0.00704324s
+Running propositional reduction
+Solving with CaDiCaL 2.0.0
+3095 variables, 5244 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.000306486s
+Runtime decision procedure: 0.000374639s
+Running propositional reduction
+Solving with CaDiCaL 2.0.0
+3096 variables, 5245 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.00021969s
+Runtime decision procedure: 0.000302288s
+Running propositional reduction
+Solving with CaDiCaL 2.0.0
+3097 variables, 5246 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.000145157s
+Runtime decision procedure: 0.000224986s
+Running propositional reduction
+Solving with CaDiCaL 2.0.0
+3098 variables, 5247 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.000147466s
+Runtime decision procedure: 0.000230188s
+Running propositional reduction
+Solving with CaDiCaL 2.0.0
+3099 variables, 5248 clauses
+SAT checker: instance is UNSATISFIABLE
+Runtime Solver: 7.9947e-05s
+Runtime decision procedure: 0.000178046s
+Finished run_cbmc in 0.16976604s
+
+RESULTS:
+Check 1: kani_proofs::verify_reconcile_host_claim_safety.assertion.1
+	 - Status: SUCCESS
+	 - Description: "assertion failed: host_success"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:322:9 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 2: kani_proofs::verify_reconcile_host_claim_safety.assertion.2
+	 - Status: SUCCESS
+	 - Description: "assertion failed: host_state_after == Some(new_state)"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:326:9 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 3: kani_proofs::verify_reconcile_host_claim_safety.unreachable.1
+	 - Status: SUCCESS
+	 - Description: "unreachable code"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:329:15 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 4: kani_proofs::verify_reconcile_host_claim_safety.assertion.3
+	 - Status: SUCCESS
+	 - Description: "assertion failed: new_state == TdispTdiState::Unlocked"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:339:17 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 5: kani_proofs::verify_reconcile_host_claim_safety.assertion.4
+	 - Status: SUCCESS
+	 - Description: "assertion failed: state_before == TdispTdiState::Locked"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:335:17 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 6: kani_proofs::verify_reconcile_host_claim_safety.assertion.5
+	 - Status: SUCCESS
+	 - Description: "assertion failed: new_state == TdispTdiState::Run"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:336:17 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 7: kani_proofs::verify_reconcile_host_claim_safety.assertion.6
+	 - Status: SUCCESS
+	 - Description: "assertion failed: state_before == TdispTdiState::Unlocked"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:331:17 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 8: kani_proofs::verify_reconcile_host_claim_safety.assertion.7
+	 - Status: SUCCESS
+	 - Description: "assertion failed: new_state == TdispTdiState::Locked"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:332:17 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 9: kani_proofs::verify_reconcile_host_claim_safety.assertion.8
+	 - Status: SUCCESS
+	 - Description: "assertion failed: new_state == state_before"
+	 - Location: vm/devices/tdisp/src/kani_proofs.rs:343:17 in function kani_proofs::verify_reconcile_host_claim_safety
+
+Check 10: test_helpers::any_tdi_state.assertion.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: vm/devices/tdisp/src/test_helpers.rs:164:11 in function test_helpers::any_tdi_state
+
+Check 11: test_helpers::any_tdi_state.arithmetic_overflow.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: vm/devices/tdisp/src/test_helpers.rs:164:11 in function test_helpers::any_tdi_state
+
+Check 12: test_helpers::any_requested_op.assertion.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: vm/devices/tdisp/src/test_helpers.rs:200:11 in function test_helpers::any_requested_op
+
+Check 13: test_helpers::any_requested_op.arithmetic_overflow.1
+	 - Status: SUCCESS
+	 - Description: "attempt to calculate the remainder with a divisor of zero"
+	 - Location: vm/devices/tdisp/src/test_helpers.rs:200:11 in function test_helpers::any_requested_op
+
+Check 14: std::option::Option::<tdisp_proto::TdispTdiState>::ok_or::<reconcile::HostClaimRejection>.unreachable.1
+	 - Status: SUCCESS
+	 - Description: "unreachable code"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1338:15 in function std::option::Option::<tdisp_proto::TdispTdiState>::ok_or::<reconcile::HostClaimRejection>
+
+Check 15: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.unreachable.1
+	 - Status: SUCCESS
+	 - Description: "unreachable code"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 16: <std::result::Result<tdisp_proto::TdispTdiState, reconcile::HostClaimRejection> as std::ops::Try>::branch.unreachable.1
+	 - Status: SUCCESS
+	 - Description: "unreachable code"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:2173:15 in function <std::result::Result<tdisp_proto::TdispTdiState, reconcile::HostClaimRejection> as std::ops::Try>::branch
+
+Check 17: reconcile::reconcile_host_claim.unreachable.1
+	 - Status: SUCCESS
+	 - Description: "unreachable code"
+	 - Location: vm/devices/tdisp/src/lib.rs:0:0 in function reconcile::reconcile_host_claim
+
+Check 18: std::option::Option::<tdisp_proto::TdispTdiState>::ok_or::<reconcile::HostClaimRejection>.pointer_dereference.1
+	 - Status: SUCCESS
+	 - Description: "dereference failure: dead object"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1338:15 in function std::option::Option::<tdisp_proto::TdispTdiState>::ok_or::<reconcile::HostClaimRejection>
+
+Check 19: test_helpers::any_optional_tdi_state.pointer_dereference.1
+	 - Status: SUCCESS
+	 - Description: "dereference failure: dead object"
+	 - Location: vm/devices/tdisp/src/test_helpers.rs:191:53 in function test_helpers::any_optional_tdi_state
+
+Check 20: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.1
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer NULL"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 21: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.2
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer invalid"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 22: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.3
+	 - Status: SUCCESS
+	 - Description: "dereference failure: deallocated dynamic object"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 23: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.4
+	 - Status: SUCCESS
+	 - Description: "dereference failure: dead object"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 24: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.5
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer outside object bounds"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 25: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.6
+	 - Status: SUCCESS
+	 - Description: "dereference failure: invalid integer address"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 26: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.7
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer NULL"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 27: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.8
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer invalid"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 28: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.9
+	 - Status: SUCCESS
+	 - Description: "dereference failure: deallocated dynamic object"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 29: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.10
+	 - Status: SUCCESS
+	 - Description: "dereference failure: dead object"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 30: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.11
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer outside object bounds"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 31: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.12
+	 - Status: SUCCESS
+	 - Description: "dereference failure: invalid integer address"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 32: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.13
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer NULL"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 33: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.14
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer invalid"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 34: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.15
+	 - Status: SUCCESS
+	 - Description: "dereference failure: deallocated dynamic object"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 35: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.16
+	 - Status: SUCCESS
+	 - Description: "dereference failure: dead object"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 36: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.17
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer outside object bounds"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 37: <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq.pointer_dereference.18
+	 - Status: SUCCESS
+	 - Description: "dereference failure: invalid integer address"
+	 - Location: ../../../../../home/runner/.rustup/toolchains/nightly-2025-11-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2365:15 in function <std::option::Option<tdisp_proto::TdispTdiState> as std::cmp::PartialEq>::eq
+
+Check 38: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.1
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer NULL"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 39: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.2
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer invalid"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 40: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.3
+	 - Status: SUCCESS
+	 - Description: "dereference failure: deallocated dynamic object"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 41: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.4
+	 - Status: SUCCESS
+	 - Description: "dereference failure: dead object"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 42: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.5
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer outside object bounds"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 43: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.6
+	 - Status: SUCCESS
+	 - Description: "dereference failure: invalid integer address"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 44: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.7
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer NULL"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 45: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.8
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer invalid"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 46: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.9
+	 - Status: SUCCESS
+	 - Description: "dereference failure: deallocated dynamic object"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 47: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.10
+	 - Status: SUCCESS
+	 - Description: "dereference failure: dead object"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 48: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.11
+	 - Status: SUCCESS
+	 - Description: "dereference failure: pointer outside object bounds"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+Check 49: <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq.pointer_dereference.12
+	 - Status: SUCCESS
+	 - Description: "dereference failure: invalid integer address"
+	 - Location: ../../../target/kani/x86_64-unknown-linux-gnu/debug/build/tdisp_proto-c8f873dabdaf653c/out/tdisp.rs:151:30 in function <tdisp_proto::TdispTdiState as std::cmp::PartialEq>::eq
+
+
+SUMMARY:
+ ** 0 of 49 failed
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.16864371s
+
+Manual Harness Summary:
+Complete - 1 successfully verified harnesses, 0 failures, 1 total.

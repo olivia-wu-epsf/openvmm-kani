@@ -119,9 +119,7 @@ impl TdispResourceValidationInterface for TdispSevTioResourceValidator {
         let mshv_vtl = Self::open_mshv_vtl()?;
 
         // Modify the pages to private before validation
-        match mshv
-            .modify_gpa_visibility(HostVisibilityType::PRIVATE, &pfns)
-        {
+        match mshv.modify_gpa_visibility(HostVisibilityType::PRIVATE, &pfns) {
             Ok(_) => tracing::info!(
                 page_count = pfns.len(),
                 "successfully modified GPA page visibility to private for MMIO unblock"
@@ -316,9 +314,7 @@ impl TdispResourceValidationInterface for TdispSevTioResourceValidator {
             page_count = pfns.len(),
             "about to call modify_gpa_visibility(SHARED)"
         );
-        match mshv
-            .modify_gpa_visibility(HostVisibilityType::SHARED, &pfns)
-        {
+        match mshv.modify_gpa_visibility(HostVisibilityType::SHARED, &pfns) {
             Ok(_) => tracing::info!(
                 page_count = pfns.len(),
                 "successfully flipped GPA pages back to shared for MMIO block"

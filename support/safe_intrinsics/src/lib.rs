@@ -13,7 +13,11 @@
 /// Invokes the cpuid instruction with input values `eax` and `ecx`.
 #[cfg(target_arch = "x86_64")]
 pub fn cpuid(eax: u32, ecx: u32) -> core::arch::x86_64::CpuidResult {
-    core::arch::x86_64::__cpuid_count(eax, ecx)
+    // SAFETY: cpuid is safe to invoke with any operands; it has no
+    // memory or side-effect preconditions. Newer toolchains require
+    // an explicit `unsafe` block here even though the function itself
+    // is safe.
+    unsafe { core::arch::x86_64::__cpuid_count(eax, ecx) }
 }
 
 /// Invokes the rdtsc instruction.

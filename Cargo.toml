@@ -65,7 +65,7 @@ exclude = [
 ]
 
 [workspace.package]
-rust-version = "1.95"
+rust-version = "1.93"
 edition = "2024"
 
 [workspace.dependencies]
@@ -671,7 +671,7 @@ unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "forbid"
 
 # TODO: Needed for xshell compatibility, fixed in v0.2.7
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(trick_rust_analyzer_into_highlighting_interpolated_bits)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(trick_rust_analyzer_into_highlighting_interpolated_bits)', 'cfg(kani)'] }
 
 [workspace.lints.clippy]
 allow_attributes = "warn"
