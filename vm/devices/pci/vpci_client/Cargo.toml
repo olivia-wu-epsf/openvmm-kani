@@ -13,7 +13,6 @@ dev_snp_ohcl_tio_support = []
 [dependencies]
 openhcl_tdisp.workspace = true
 pci_core.workspace = true
-hcl.workspace = true
 hvdef.workspace = true
 tdisp.workspace = true
 vpci_protocol.workspace = true
@@ -27,7 +26,6 @@ inspect.workspace = true
 mesh.workspace = true
 pal_async.workspace = true
 guestmem.workspace = true
-tracelimit.workspace = true
 
 anyhow.workspace = true
 futures.workspace = true
@@ -35,8 +33,15 @@ futures-concurrency.workspace = true
 parking_lot.workspace = true
 slab.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 zerocopy.workspace = true
+
+# `tracing` / `tracelimit` are only linked under non-Kani builds. Under
+# Kani the crate provides its own no-op `mod tracing` / `mod tracelimit`
+# shims (see `lib.rs`). See the matching note in `tdisp/Cargo.toml` for
+# why the `tracing/max_level_off` feature alone is insufficient.
+[target.'cfg(not(kani))'.dependencies]
+tracing.workspace = true
+tracelimit.workspace = true
 
 [dev-dependencies]
 chipset_device.workspace = true

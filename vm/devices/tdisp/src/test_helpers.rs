@@ -109,21 +109,30 @@ impl TdispHostDeviceInterface for KaniSymbolicHostInterface {
     }
 
     fn tdisp_bind_device(&mut self) -> crate::Result<()> {
-        if kani::any() { Ok(()) } else { Err(crate::Error) }
+        if kani::any() {
+            Ok(())
+        } else {
+            Err(crate::Error)
+        }
     }
 
     fn tdisp_start_device(&mut self) -> crate::Result<()> {
-        if kani::any() { Ok(()) } else { Err(crate::Error) }
+        if kani::any() {
+            Ok(())
+        } else {
+            Err(crate::Error)
+        }
     }
 
     fn tdisp_unbind_device(&mut self) -> crate::Result<()> {
-        if kani::any() { Ok(()) } else { Err(crate::Error) }
+        if kani::any() {
+            Ok(())
+        } else {
+            Err(crate::Error)
+        }
     }
 
-    fn tdisp_get_device_report(
-        &mut self,
-        _report_type: TdispReportType,
-    ) -> crate::Result<Vec<u8>> {
+    fn tdisp_get_device_report(&mut self, _report_type: TdispReportType) -> crate::Result<Vec<u8>> {
         // Return an empty `Vec` on success: a symbolic-length `Vec`
         // would force CBMC to unwind allocator/Drop machinery on
         // every reachable path. The proofs that use this mock do not
@@ -178,5 +187,34 @@ pub fn any_guest_protocol_type() -> TdispGuestProtocolType {
         0 => TdispGuestProtocolType::Invalid,
         1 => TdispGuestProtocolType::AmdSevTioV1,
         _ => TdispGuestProtocolType::IntelTdxConnectV1,
+    }
+}
+
+/// Returns a fully-symbolic `Option<TdispTdiState>`, modelling the
+/// `tdi_state_after_enum()` return shape on a host response: `None`
+/// represents an unrecognized integer (host returned a value outside
+/// the [`TdispTdiState`] domain), `Some(state)` represents one of the
+/// four known variants.
+#[cfg(kani)]
+pub fn any_optional_tdi_state() -> Option<TdispTdiState> {
+    if kani::any() {
+        Some(any_tdi_state())
+    } else {
+        None
+    }
+}
+
+/// Returns a fully-symbolic
+/// [`crate::reconcile::ParavisorRequestedTdispOp`] suitable for
+/// initialising a Kani harness. CBMC explores all five variants.
+#[cfg(kani)]
+pub fn any_requested_op() -> crate::reconcile::ParavisorRequestedTdispOp {
+    use crate::reconcile::ParavisorRequestedTdispOp;
+    match kani::any::<u8>() % 5 {
+        0 => ParavisorRequestedTdispOp::GetDeviceInterfaceInfo,
+        1 => ParavisorRequestedTdispOp::Bind,
+        2 => ParavisorRequestedTdispOp::StartTdi,
+        3 => ParavisorRequestedTdispOp::GetTdiReport,
+        _ => ParavisorRequestedTdispOp::Unbind,
     }
 }

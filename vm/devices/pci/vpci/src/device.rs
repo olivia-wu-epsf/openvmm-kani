@@ -1945,9 +1945,7 @@ mod tests {
 
         /// Send a `VPCI_QUERY_ISOLATED_RESOURCES` packet for slot 0 and
         /// read the completion reply.
-        async fn send_query_isolated_resources(
-            &mut self,
-        ) -> protocol::VpciIsolatedResourcesReply {
+        async fn send_query_isolated_resources(&mut self) -> protocol::VpciIsolatedResourcesReply {
             let msg = protocol::VpciQueryIsolatedResources {
                 message_type: protocol::MessageType::VPCI_QUERY_ISOLATED_RESOURCES,
                 slot: SlotNumber::new(),

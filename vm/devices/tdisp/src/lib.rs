@@ -37,6 +37,12 @@ pub mod serialize_proto;
 /// Serialization code from PCI standard structures reported from the TDISP device directly.
 pub mod devicereport;
 
+/// Malicious-host reconciliation of cached TDI state for the
+/// paravisor-as-TDISP-guest direction. See [`reconcile`] for the
+/// rationale; the Kani harness lives in `src/kani_proofs.rs` (gated
+/// on `cfg(kani)`).
+pub mod reconcile;
+
 #[cfg(test)]
 mod tests;
 

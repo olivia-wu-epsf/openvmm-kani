@@ -12,9 +12,130 @@
 pub mod tdisp;
 mod tests;
 
+#[cfg(kani)]
+pub mod kani_proofs;
+
+// ----------------------------------------------------------------------------
+// `tracing` / `tracelimit` shims under Kani.
+//
+// Both crates are entirely absent from the dep graph under `cfg(kani)`
+// (see `Cargo.toml`). Local `mod tracing` / `mod tracelimit` shadow
+// them at the same path so every `tracing::info!` / `error!` /
+// `tracelimit::warn_ratelimited!` call site resolves to a no-op
+// macro that discards its arguments at parse time. This eliminates
+// the `tracing-core::Dispatch` TLS reachability blow-up documented in
+// the model-checking SKILL playbook (anti-patterns #5 and #6).
+#[cfg(kani)]
+mod tracing {
+    #[macro_export]
+    macro_rules! __vpci_client_kani_tracing_noop {
+        ($($t:tt)*) => {
+            ()
+        };
+    }
+    pub use crate::__vpci_client_kani_tracing_noop as info;
+    pub use crate::__vpci_client_kani_tracing_noop as error;
+    pub use crate::__vpci_client_kani_tracing_noop as warn;
+    pub use crate::__vpci_client_kani_tracing_noop as debug;
+    pub use crate::__vpci_client_kani_tracing_noop as trace;
+}
+
+#[cfg(kani)]
+mod tracelimit {
+    pub use crate::__vpci_client_kani_tracing_noop as info_ratelimited;
+    pub use crate::__vpci_client_kani_tracing_noop as error_ratelimited;
+    pub use crate::__vpci_client_kani_tracing_noop as warn_ratelimited;
+}
+
+// ----------------------------------------------------------------------------
+// Error shim.
+//
+// Production builds use `anyhow` (`anyhow::anyhow!`, `anyhow::Result`,
+// `anyhow::Context::context`) for diagnostic messages and backtraces.
+//
+// Under Kani every `anyhow::anyhow!(...)` site expands to
+// `Backtrace::capture()` → `getenv("RUST_BACKTRACE")` →
+// `core::slice::memchr::memchr_naive`, which CBMC cannot bound on a
+// symbolic-length C string. The Display chain on `anyhow::fmt::Indented`
+// is similarly unbounded. To keep production call sites untouched, the
+// crate uses `crate::Error` / `crate::Result` / `crate::Context` /
+// `crate::err!`, which resolve to the real `anyhow` types under normal
+// builds and to a unit-like Kani-only stub under `cfg(kani)`. The
+// decision predicates are unaffected; only the error payload is
+// abstracted. See `.github/skills/model-checking/SKILL.md`,
+// anti-pattern #1.
+#[cfg(not(kani))]
+mod err_shim {
+    pub use anyhow::Context;
+    pub use anyhow::Error;
+    pub use anyhow::Result;
+
+    /// Forwards to [`anyhow::anyhow!`].
+    #[macro_export]
+    macro_rules! err {
+        ($($t:tt)*) => { ::anyhow::anyhow!($($t)*) };
+    }
+}
+
+#[cfg(kani)]
+mod err_shim {
+    /// Kani stand-in for [`anyhow::Error`]. No `Backtrace::capture` /
+    /// `getenv` / `memchr_naive` chain.
+    #[derive(Debug)]
+    pub struct Error;
+
+    impl core::fmt::Display for Error {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            // Empty literal — no `core::fmt::write` recursion, no
+            // `memchr` over a format string.
+            f.write_str("")
+        }
+    }
+
+    impl std::error::Error for Error {}
+
+    /// Kani stand-in for [`anyhow::Result`]. The error type defaults
+    /// to [`Error`] but can be overridden so signatures like
+    /// `Result<(), MyEnum>` continue to type-check.
+    pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+    /// Kani stand-in for [`anyhow::Context`]. Discards the message
+    /// and erases the inner error type.
+    pub trait Context<T, E> {
+        fn context<C>(self, ctx: C) -> Result<T>;
+    }
+
+    impl<T, E> Context<T, E> for core::result::Result<T, E> {
+        fn context<C>(self, _ctx: C) -> Result<T> {
+            self.map_err(|_| Error)
+        }
+    }
+
+    /// Forwarding macro for [`anyhow::anyhow!`] — discards arguments
+    /// at parse time (no formatting evaluated, no `core::fmt` /
+    /// `memchr` chain dragged in) and yields a bare [`Error`].
+    #[macro_export]
+    macro_rules! err {
+        ($($t:tt)*) => {{ $crate::Error }};
+    }
+}
+
+pub use err_shim::Error;
+pub use err_shim::Result;
+// Note: `Context` is intentionally NOT re-exported at the crate root.
+// Re-exporting would shadow `anyhow::Context` at every `.context(...)`
+// call site in this file under `cfg(kani)`, producing E0034
+// "multiple applicable items". The shim trait remains accessible as
+// `crate::err_shim::Context` if a Kani-only call site needs it.
+
 pub use tdisp::VpciClientTdispState;
 
-use anyhow::Context;
+// Bring the real `anyhow::Context` trait into scope under its own
+// name so the many `.context("...")?` call sites in this file resolve.
+// Production builds re-export the same trait; under `cfg(kani)` the
+// trait method calls still type-check (they end up returning
+// `anyhow::Result<T>`, which production signatures still use).
+use anyhow::Context as _;
 use futures::FutureExt;
 use futures::Stream;
 use futures::StreamExt;
@@ -345,6 +466,12 @@ impl VpciDeviceDescription {
     /// Initializes the device, returning a VPCI device instance that can be
     /// used to interact with it. Also returns an object to use to get notified
     /// when the device is ejected or surprise removed.
+    //
+    // Gated out under Kani because it constructs a `VpciClientTdispState`
+    // via `VpciClientTdispState::new`, which takes a `mesh::Sender` whose
+    // type alone forces the mesh-runtime thread-local plumbing
+    // (`pthread_key_create`) into the reachability set.
+    #[cfg(not(kani))]
     pub async fn init(
         self,
         resource_validator: Option<Arc<dyn TdispResourceValidationInterface>>,

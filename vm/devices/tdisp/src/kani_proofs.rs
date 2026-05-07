@@ -37,6 +37,8 @@
 
 use crate::TdispGuestRequestInterface;
 use crate::test_helpers::any_guest_protocol_type;
+use crate::test_helpers::any_optional_tdi_state;
+use crate::test_helpers::any_requested_op;
 use crate::test_helpers::any_tdi_state;
 use crate::test_helpers::new_symbolic_tdisp_state_machine;
 use tdisp_proto::TdispGuestProtocolType;
@@ -246,4 +248,100 @@ fn verify_unbind_does_not_change_protocol() {
     assert_eq!(sm.kani_guest_protocol_type(), guest_protocol_type);
 
     core::mem::forget(sm);
+}
+
+// ----------------------------------------------------------------------------
+// Malicious-host cached-state safety (paravisor-as-TDISP-guest direction)
+// ----------------------------------------------------------------------------
+//
+// The proofs above target the paravisor-as-TDISP-host direction (threat
+// boundary b: VTL0 guest → VTL2). The harness below targets the
+// paravisor-as-TDISP-guest direction (threat boundary a: untrusted host
+// → VTL2 paravisor), which is the direction that matters for the CVM
+// malicious-host audit.
+//
+// `vpci_client::tdisp::send_tdisp_command` advances cached TDI state on
+// any recognized `tdi_state_after`, then performs a per-method
+// post-check (e.g. `tdisp_bind_interface` checks that cached state ==
+// `Locked`). A malicious host can therefore leave the cached state in
+// a value the paravisor never asked for — see audit finding #2 in
+// `docs/openhcl-knowledge-base.md`.
+//
+// `crate::reconcile::reconcile_host_claim` is the pure decision
+// function that closes that gap. The harness exhaustively explores the
+// adversary's choice of `(host_success, host_state_after)` and the
+// paravisor's `(requested, state_before)` and verifies that whenever
+// the function returns `Ok(new_state)`, `(state_before, new_state)` is
+// a transition the requested operation could legitimately produce.
+// Equivalently: a malicious host cannot trick the paravisor into
+// caching a state that is inconsistent with the operation it actually
+// issued.
+
+/// Exhaustive proof of [`crate::reconcile::reconcile_host_claim`]'s
+/// malicious-host-safety contract.
+///
+/// # Setup
+///
+/// Symbolic over the paravisor's request `(requested, state_before)`
+/// AND over the host-controlled response `(host_success,
+/// host_state_after)`. CBMC explores all 5 × 4 × 2 × 5 = 200
+/// combinations of the protobuf-enum domains plus the `None` case for
+/// `host_state_after`.
+///
+/// # Property
+///
+/// If `reconcile_host_claim` returns `Ok(new_state)`, then **all** of:
+///
+/// 1. The host actually claimed success.
+/// 2. The host actually claimed a recognized post-state, and that
+///    post-state equals `new_state`.
+/// 3. `(state_before, new_state)` is a transition consistent with
+///    `requested`:
+///    - `Bind`: `Unlocked → Locked`
+///    - `StartTdi`: `Locked → Run`
+///    - `Unbind`: `* → Unlocked`
+///    - `GetDeviceInterfaceInfo` / `GetTdiReport`: `s → s`
+///
+/// Equivalently, no adversary choice of `(host_success,
+/// host_state_after)` can cause the function to return `Ok` for an
+/// `(requested, state_before, new_state)` triple outside this table.
+#[kani::proof]
+fn verify_reconcile_host_claim_safety() {
+    use crate::reconcile::ParavisorRequestedTdispOp;
+    use crate::reconcile::reconcile_host_claim;
+
+    let requested = any_requested_op();
+    let state_before = any_tdi_state();
+    let host_success: bool = kani::any();
+    let host_state_after = any_optional_tdi_state();
+
+    let result = reconcile_host_claim(requested, state_before, host_success, host_state_after);
+
+    if let Ok(new_state) = result {
+        // (1) Host must have claimed success.
+        assert!(host_success);
+
+        // (2) Host must have claimed a recognized post-state, and it
+        //     must equal the new cached state we are about to commit.
+        assert_eq!(host_state_after, Some(new_state));
+
+        // (3) `(state_before, new_state)` must match the requested op.
+        match requested {
+            ParavisorRequestedTdispOp::Bind => {
+                assert_eq!(state_before, TdispTdiState::Unlocked);
+                assert_eq!(new_state, TdispTdiState::Locked);
+            }
+            ParavisorRequestedTdispOp::StartTdi => {
+                assert_eq!(state_before, TdispTdiState::Locked);
+                assert_eq!(new_state, TdispTdiState::Run);
+            }
+            ParavisorRequestedTdispOp::Unbind => {
+                assert_eq!(new_state, TdispTdiState::Unlocked);
+            }
+            ParavisorRequestedTdispOp::GetDeviceInterfaceInfo
+            | ParavisorRequestedTdispOp::GetTdiReport => {
+                assert_eq!(new_state, state_before);
+            }
+        }
+    }
 }

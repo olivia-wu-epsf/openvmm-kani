@@ -725,22 +725,19 @@ impl PciConfigSpace for RelayedVpciDevice {
                 // immediately since no active bind is in place.
                 let (write, token) = chipset_device::io::deferred::defer_write();
                 let device = self.device.clone();
-                let fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>> =
-                    Box::pin(async move {
-                        let state = device.tdisp_tdi_state().await;
-                        if state == TdispTdiState::Uninitialized
-                            || state == TdispTdiState::Unlocked
-                        {
-                            device.write_cfg(offset, value);
-                        } else {
-                            // Unbind first; the cfg write must not happen
-                            // while the device is still bound/running.
-                            device.tdisp_on_device_deactivate().await;
-                            // Write to the command register after the
-                            // unbind regardless of its outcome.
-                            device.write_cfg(offset, value);
-                        }
-                    });
+                let fut: Pin<Box<dyn Future<Output = ()> + Send + Sync>> = Box::pin(async move {
+                    let state = device.tdisp_tdi_state().await;
+                    if state == TdispTdiState::Uninitialized || state == TdispTdiState::Unlocked {
+                        device.write_cfg(offset, value);
+                    } else {
+                        // Unbind first; the cfg write must not happen
+                        // while the device is still bound/running.
+                        device.tdisp_on_device_deactivate().await;
+                        // Write to the command register after the
+                        // unbind regardless of its outcome.
+                        device.write_cfg(offset, value);
+                    }
+                });
 
                 tracing::info!(
                     offset,
