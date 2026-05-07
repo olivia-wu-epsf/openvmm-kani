@@ -4,21 +4,60 @@
 //! Kani formal-verification harnesses for the paravisor-as-TDISP-guest
 //! direction (threat boundary **a**: untrusted host → VTL2 paravisor).
 //!
-//! The harness in this module drives the **production** async method
-//! [`crate::tdisp::VpciClientTdispState::tdisp_bind_interface`] under
-//! a fully-symbolic host response, modelling a malicious host that
-//! may return any combination of `result` / `tdi_state_after` / oneof
-//! payload. The host channel is replaced (under `cfg(kani)`) by
-//! `HostChannel::KaniMock`, which short-circuits the mesh / VMBus /
-//! async-runtime layers without changing the logic of
-//! `tdisp_bind_interface` itself.
+//! The harnesses in this module drive **production** methods on
+//! [`crate::tdisp::VpciClientTdispState`] under fully-symbolic host
+//! responses, modelling a malicious host that may return any
+//! combination of `result` / `tdi_state_after` / oneof payload. The
+//! host channel is replaced (under `cfg(kani)`) by
+//! [`crate::tdisp::HostChannel::KaniMock`], which short-circuits the
+//! mesh / VMBus / async-runtime layers without changing the logic of
+//! the production code itself.
 //!
-//! See `docs/openhcl-knowledge-base.md` "Malicious-host audit" section
-//! for the audit findings this harness is meant to constrain. The
-//! property below is the strongest currently-true statement about the
-//! production code; the post-condition tightens once
-//! `send_tdisp_command`'s unconditional `update_tdi_state` is replaced
-//! with a request-aware reconciliation step.
+//! # Property → harness mapping
+//!
+//! Properties are defined in `docs/tdisp-paravisor-security-properties.md`.
+//! Audit-finding IDs (TDISP-001..008) are defined in `docs/bugs/`.
+//!
+//! | Property | Harness | Status |
+//! |----------|---------|--------|
+//! | F-1, F-2 (Bind)        | [`verify_bind_cannot_cache_inconsistent_state_on_success`] | PASS |
+//! | F-1, F-2 (StartTdi)    | [`verify_start_device_post_check`]      | FAIL — TDISP-004 |
+//! | F-1, F-2 (Unbind)      | [`verify_unbind_post_check`]            | FAIL — TDISP-005 |
+//! | F-1, F-2 (GetReport)   | [`verify_get_device_report_post_check`] | FAIL — TDISP-006 |
+//! | F-7 (positive gate)    | [`verify_dma_unblock_gating`]           | PASS |
+//! | F-7 (negative gate)    | [`verify_paravisor_never_unblocks_when_gate_closed`] | PASS |
+//! | F-12 (re-block local)  | [`verify_unbind_reblocks_previously_unblocked_resources`] | PASS |
+//! | F-11                   | [`verify_isolation_snapshot_only_ready_when_run`] | FAIL — TDISP-008 |
+//! | F-13                   | [`verify_unbind_clears_per_bind_bookkeeping`] | PASS |
+//! | F-14                   | [`verify_unbind_preserve_report_semantics`] | FAIL — TDISP-005/008 |
+//!
+//! # Deferred properties (no harness today)
+//!
+//! These properties depend on production state fields or external
+//! oracles that are not yet modelled in `vpci_client`. See the
+//! commented-out spec block at the end of this file for the executable
+//! intent of each.
+//!
+//! - **F-3** Report integrity (V1 hash check): needs `verified` flag
+//!   on cached report and an oracle `device_info_hash`.
+//! - **F-4** Lock-epoch nonce binding: needs `lock_epoch` nonce field
+//!   tied to LOCK_INTERFACE_RESPONSE.
+//! - **F-5** New LOCK invalidates prior epoch: depends on F-4 fields.
+//! - **F-6** MMIO containment + injectivity: needs containment check
+//!   in `tdisp_on_mmio_reconfigured` and aliasing check across BARs.
+//! - **F-8** IDE = SECURE before LOCK: needs `ide_state` and
+//!   `lock_session` fields plus IDE-state-machine axiom.
+//! - **F-9** Async insecure-event response: needs async event model.
+//! - **F-10** `default_stream_id` binding: needs IDE-stream id field.
+//! - **F-12** key/secret scrub ordering: needs IDE/SPDM key model.
+//! - **F-15** Recovery-path cleanliness: needs explicit `Untrusted`
+//!   state and recovery API.
+//! - **F-16** Measurement / identity policy: lives in
+//!   `underhill_attestation`, out of scope for this crate.
+//! - **F-17** TDI-ID binding across LOCK/REPORT/START: needs response
+//!   `tdi_id` field validation in `send_tdisp_command`.
+//! - **F-17a** SPDM peer-identity rebinding: needs SPDM cert-chain
+//!   model.
 
 use crate::tdisp::VpciClientTdispState;
 use openhcl_tdisp::GuestToHostResponse;
@@ -221,7 +260,313 @@ fn verify_bind_cannot_cache_inconsistent_state_on_success() {
 }
 
 // ----------------------------------------------------------------------------
-// DMA / MMIO unblock-gating harness (Stage E).
+// Per-method post-check harnesses for the other state-changing methods on
+// `VpciClientTdispState`. Each follows the same "fully-symbolic host
+// response" recipe as `verify_bind_cannot_cache_inconsistent_state_on_success`
+// and proves three security properties under a malicious host:
+//
+//   (a) Universal cache invariant: the cached `tdi_state` after the call
+//       is always either the prior cached value or the host's decoded
+//       claim. The host cannot inject a value it never claimed, and an
+//       undecodable claim must leave the cache untouched.
+//   (b) Per-method post-state: a successful return implies the host
+//       claimed the operation's expected post-state (Locked / Run /
+//       Unlocked) AND the cache reflects it.
+//   (c) Per-method response payload: a successful return implies the
+//       host's `response` oneof was the matching variant (Bind /
+//       StartTdi / Unbind / GetTdiReport).
+// ----------------------------------------------------------------------------
+
+use openhcl_tdisp::GuestToHostResponseVariantOneof as Response;
+use openhcl_tdisp::TdispCommandResponseBind;
+use openhcl_tdisp::TdispCommandResponseStartTdi;
+use openhcl_tdisp::TdispCommandResponseUnbind;
+use openhcl_tdisp::TdispGuestUnbindReason;
+
+/// Build a fully-symbolic [`GuestToHostResponse`] whose `response`
+/// oneof is one of: `None`, the *matching* variant for the operation
+/// under test, or a *mismatched* variant (Bind payload). The
+/// mismatched variant is included so the harness covers the malicious
+/// case where the host returns Success + claims the right state +
+/// returns a wrong-typed payload.
+///
+/// `which_matching` lets each per-method harness inject its own
+/// matching variant.
+fn any_host_response_with_payload(matching: Response, mismatched: Response) -> GuestToHostResponse {
+    let response = match kani::any::<u8>() % 3 {
+        0 => None,
+        1 => Some(matching),
+        _ => Some(mismatched),
+    };
+    GuestToHostResponse {
+        result: any_result_code(),
+        tdi_state_before: any_state_after_int(),
+        tdi_state_after: any_state_after_int(),
+        response,
+    }
+}
+
+/// Decode `tdi_state_after_int` the same way
+/// [`GuestToHostResponse::tdi_state_after_enum`] does. Helper for
+/// post-condition assertions.
+fn decode_tdi_state(int_value: i32) -> Option<TdispTdiState> {
+    match int_value {
+        x if x == TdispTdiState::Uninitialized as i32 => Some(TdispTdiState::Uninitialized),
+        x if x == TdispTdiState::Unlocked as i32 => Some(TdispTdiState::Unlocked),
+        x if x == TdispTdiState::Locked as i32 => Some(TdispTdiState::Locked),
+        x if x == TdispTdiState::Run as i32 => Some(TdispTdiState::Run),
+        _ => None,
+    }
+}
+
+/// Drive an `async fn(&mut VpciClientTdispState) -> R` to completion
+/// using a single-poll no-op-waker executor. The `KaniMock` host
+/// channel resolves on the first poll, so a single `poll` matches an
+/// executor's behaviour exactly. This avoids
+/// `futures::executor::block_on`, which short-circuits on
+/// `pthread_key_create` (`assume(false)`) and would make the
+/// post-conditions vacuously true.
+macro_rules! kani_run_async {
+    ($state:ident, $expr:expr) => {{
+        use core::future::Future;
+        use core::pin::pin;
+        use core::task::Context;
+        use core::task::Poll;
+        use core::task::Waker;
+
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        let mut fut = pin!($expr);
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(r) => r,
+            Poll::Pending => panic!("KaniMock future returned Pending unexpectedly"),
+        }
+    }};
+}
+
+/// Per-method post-check harness for
+/// [`VpciClientTdispState::tdisp_start_device`].
+///
+/// # Security properties (malicious-host adversary)
+///
+/// 1. **Cache integrity (universal):** the cached `tdi_state` after
+///    the call is `state_before` (if the host's claim was undecodable)
+///    or `decoded(host_state_after)` — the host cannot make the
+///    paravisor invent a state.
+/// 2. **Ok-implies-claim:** an `Ok(())` return implies the host
+///    claimed `Success` AND `tdi_state_after == Run`.
+/// 3. **Ok-implies-cache:** an `Ok(())` return implies
+///    `cached_after == Run`.
+/// 4. **Ok-implies-payload:** an `Ok(())` return implies the host's
+///    `response` oneof was the `StartTdi` variant — a Bind-typed
+///    payload (or `None`) cannot satisfy `tdisp_start_device`.
+/// 5. **Audit-finding-#2 negative space (Err branch):** the cache may
+///    still take the host's decoded claim on Err. Documented in the
+///    universal invariant; tightens to `cached_after == state_before`
+///    once the reconciliation gate lands.
+#[kani::proof]
+#[kani::unwind(2)]
+fn verify_start_device_post_check() {
+    let state_before = any_tdi_state();
+    let response = any_host_response_with_payload(
+        Response::StartTdi(TdispCommandResponseStartTdi {}),
+        Response::Bind(TdispCommandResponseBind {}),
+    );
+    let host_result = response.result;
+    let host_state_after_int = response.tdi_state_after;
+    let host_payload_was_matching = matches!(response.response, Some(Response::StartTdi(_)));
+
+    let mut state = VpciClientTdispState::kani_new_with_response(state_before, response);
+    let result = kani_run_async!(state, state.tdisp_start_device());
+    let cached_after = state.kani_tdi_state();
+
+    let host_state_after_decoded = decode_tdi_state(host_state_after_int);
+
+    // Property 1.
+    match host_state_after_decoded {
+        Some(decoded) => assert!(cached_after == state_before || cached_after == decoded),
+        None => assert_eq!(cached_after, state_before),
+    }
+
+    if result.is_ok() {
+        // Property 2 (host_result + host claim).
+        assert_eq!(host_result, TdispGuestOperationErrorCode::Success as i32);
+        // Property 2': the host MUST have explicitly claimed `Run`
+        // for this call. This is the strict ideal: a malicious host
+        // returning Success must back its claim with the right
+        // `tdi_state_after`.
+        //
+        // **AUDIT FINDING (currently FAILS):** Kani produces a
+        // counter-example where `state_before == Run` and the
+        // host returns Success + an undecodable `tdi_state_after`.
+        // `send_tdisp_command` skips its `update_tdi_state` call,
+        // and the per-method post-check happily observes the prior
+        // cached `Run`. So a malicious host can ride a stale
+        // cached `Run` through StartTdi without ever claiming it.
+        // Tightens once `update_tdi_state` is replaced with a
+        // request-aware reconciliation step.
+        assert_eq!(host_state_after_int, TdispTdiState::Run as i32);
+        // Property 3 (cache reflects Run).
+        assert_eq!(cached_after, TdispTdiState::Run);
+        // Property 4 (payload was the matching variant).
+        assert!(host_payload_was_matching);
+    }
+
+    core::mem::forget(state);
+}
+
+/// Per-method post-check harness for
+/// [`VpciClientTdispState::tdisp_unbind`].
+///
+/// # Security properties (malicious-host adversary)
+///
+/// 1. **Cache integrity (universal):** the cached `tdi_state` after
+///    the call is `state_before` (if the host's claim was undecodable)
+///    or `decoded(host_state_after)`.
+/// 2. **Ok-implies-Success:** an `Ok(())` return implies the host
+///    claimed `Success`.
+/// 3. **Ok-implies-payload:** an `Ok(())` return implies the host's
+///    `response` oneof was the `Unbind` variant — a Bind-typed payload
+///    (or `None`) cannot satisfy `tdisp_unbind`.
+/// 4. **Ok-implies-Unlocked (STRICT IDEAL):** a successful unbind
+///    should imply the host claimed `tdi_state_after == Unlocked` AND
+///    the cache reflects it. This is the protocol-mandated post-state.
+///
+///    **AUDIT FINDING (expected to FAIL):** the production
+///    [`VpciClientTdispState::tdisp_unbind_inner`] body has no
+///    per-method post-check on `tdi_state` (unlike
+///    `tdisp_bind_interface` and `tdisp_start_device`). A malicious
+///    host can return Success + claim `tdi_state_after == Run` (or
+///    any other state) + return the Unbind payload — and the
+///    paravisor returns `Ok` while caching `Run`, leaving the
+///    paravisor convinced the device is still attested even after
+///    the unbind succeeded.
+///
+/// 5. **Ok-implies-cleared bookkeeping:** `validated_mmio_bars` and
+///    `dma_unblocked` are cleared on `Ok` (modelled implicitly via
+///    the `kani_dma_unblocked` accessor; the harness does not
+///    construct an `intercepted` or `validated_already` state since
+///    it would invoke `BTreeMap` operations that explode CBMC — see
+///    `kani-debugging.md`).
+#[kani::proof]
+#[kani::unwind(2)]
+fn verify_unbind_post_check() {
+    let state_before = any_tdi_state();
+    let response = any_host_response_with_payload(
+        Response::Unbind(TdispCommandResponseUnbind {}),
+        Response::Bind(TdispCommandResponseBind {}),
+    );
+    let host_result = response.result;
+    let host_state_after_int = response.tdi_state_after;
+    let host_payload_was_matching = matches!(response.response, Some(Response::Unbind(_)));
+
+    let mut state = VpciClientTdispState::kani_new_with_response(state_before, response);
+    let result = kani_run_async!(state, state.tdisp_unbind(TdispGuestUnbindReason::Graceful));
+    let cached_after = state.kani_tdi_state();
+
+    let host_state_after_decoded = decode_tdi_state(host_state_after_int);
+
+    // Property 1.
+    match host_state_after_decoded {
+        Some(decoded) => assert!(cached_after == state_before || cached_after == decoded),
+        None => assert_eq!(cached_after, state_before),
+    }
+
+    if result.is_ok() {
+        // Property 2.
+        assert_eq!(host_result, TdispGuestOperationErrorCode::Success as i32);
+        // Property 3.
+        assert!(host_payload_was_matching);
+        // Property 4 (STRICT IDEAL — currently FAILS, see doc above).
+        assert_eq!(host_state_after_int, TdispTdiState::Unlocked as i32);
+        assert_eq!(cached_after, TdispTdiState::Unlocked);
+        // Property 5 (DMA bookkeeping cleared).
+        assert!(!state.kani_dma_unblocked());
+    }
+
+    core::mem::forget(state);
+}
+
+/// Per-method post-check harness for
+/// [`VpciClientTdispState::tdisp_get_device_report`]
+/// (the underlying primitive for `tdisp_get_tdi_report` and
+/// `tdisp_get_tdi_device_id`).
+///
+/// # Security properties (malicious-host adversary)
+///
+/// 1. **Cache integrity (universal):** the cached `tdi_state` after
+///    the call is `state_before` (if the host's claim was undecodable)
+///    or `decoded(host_state_after)`.
+/// 2. **Ok-implies-Success:** an `Ok(_)` return implies the host
+///    claimed `Success`.
+/// 3. **Ok-implies-payload:** an `Ok(_)` return implies the host's
+///    `response` oneof was the `GetTdiReport` variant — a Bind-typed
+///    payload (or `None`) cannot satisfy `tdisp_get_device_report`.
+/// 4. **Ok-implies-bound (STRICT IDEAL):** the report should only
+///    succeed when cached `tdi_state ∈ {Locked, Run}`. Asking for a
+///    TDI report from an `Unlocked` or `Uninitialized` device is
+///    semantically meaningless and should be refused.
+///
+///    **AUDIT FINDING (expected to FAIL):** the production
+///    `tdisp_get_device_report` performs no cached-state check.
+///    A malicious host can return Success + the GetTdiReport payload
+///    while the device is `Unlocked` (or even `Uninitialized`), and
+///    the paravisor will return `Ok(buffer)` — handing a
+///    host-controlled blob to the attestation layer for an
+///    unattestable device. Combined with audit finding #2, the host
+///    can also use this call to push a stale `Run` claim into the
+///    cache without the cache ever having been advanced through Bind
+///    + StartTdi.
+#[kani::proof]
+#[kani::unwind(2)]
+fn verify_get_device_report_post_check() {
+    let state_before = any_tdi_state();
+    let response = any_host_response_with_payload(
+        Response::GetTdiReport(openhcl_tdisp::TdispCommandResponseGetTdiReport {
+            report_type: openhcl_tdisp::TdispReportType::InterfaceReport as i32,
+            report_buffer: Vec::new(),
+        }),
+        Response::Bind(TdispCommandResponseBind {}),
+    );
+    let host_result = response.result;
+    let host_state_after_int = response.tdi_state_after;
+    let host_payload_was_matching = matches!(response.response, Some(Response::GetTdiReport(_)));
+
+    let mut state = VpciClientTdispState::kani_new_with_response(state_before, response);
+    let result = kani_run_async!(
+        state,
+        state.tdisp_get_device_report(&openhcl_tdisp::TdispReportType::InterfaceReport)
+    );
+    let cached_after = state.kani_tdi_state();
+
+    let host_state_after_decoded = decode_tdi_state(host_state_after_int);
+
+    // Property 1.
+    match host_state_after_decoded {
+        Some(decoded) => assert!(cached_after == state_before || cached_after == decoded),
+        None => assert_eq!(cached_after, state_before),
+    }
+
+    if result.is_ok() {
+        // Property 2.
+        assert_eq!(host_result, TdispGuestOperationErrorCode::Success as i32);
+        // Property 3.
+        assert!(host_payload_was_matching);
+        // Property 4 (STRICT IDEAL — currently FAILS, see doc above).
+        assert!(
+            cached_after == TdispTdiState::Locked || cached_after == TdispTdiState::Run,
+            "GetTdiReport returned Ok with cached state not in {{Locked, Run}}",
+        );
+    }
+
+    // The Ok branch returns a `Vec<u8>` — `core::mem::forget` it
+    // along with the state to keep CBMC reach bounded.
+    if let Ok(buf) = result {
+        core::mem::forget(buf);
+    }
+    core::mem::forget(state);
+}
+
 //
 // Verifies the synchronous gate inside
 // [`VpciClientTdispState::tdisp_on_mmio_reconfigured`]: the production
@@ -617,4 +962,484 @@ fn verify_paravisor_never_unblocks_when_gate_closed() {
     assert_eq!(dma_unblocked_after, dma_unblocked_before);
 
     core::mem::forget(state);
+}
+
+// ----------------------------------------------------------------------------
+// Unbind re-block harness: prove that `tdisp_unbind` re-blocks every
+// previously-unblocked MMIO range and DMA before sending the host the
+// unbind command. Without this, a malicious host could observe pages
+// that were once mapped into the device's private domain after an
+// unbind, defeating the chain-of-custody.
+// ----------------------------------------------------------------------------
+
+/// Recording validator for the unbind re-block harness. Captures
+/// the arguments of the *first* `tdisp_block_mmio` call and a flag
+/// for `tdisp_block_dma`. The harness only ever has one BAR
+/// pre-populated (single-entry `BTreeMap`), so a single recorded
+/// call is sufficient.
+///
+/// Each captured field is wrapped in [`AtomicU64`] / [`AtomicU32`]
+/// / [`AtomicBool`] so the validator can be `Send + Sync` and the
+/// `Arc<dyn>` upcast works.
+struct KaniReblockRecordingValidator {
+    block_mmio_called: AtomicBool,
+    block_mmio_bar_id: core::sync::atomic::AtomicU32, // u16 widened
+    block_mmio_base_gpa: core::sync::atomic::AtomicU64,
+    block_mmio_length: core::sync::atomic::AtomicU32,
+    block_dma_called: AtomicBool,
+    // Sentinel: the unblock methods MUST NOT be invoked from the
+    // unbind path. If they are, that's a verification failure.
+    unblock_mmio_called: AtomicBool,
+    unblock_dma_called: AtomicBool,
+}
+
+impl KaniReblockRecordingValidator {
+    fn new() -> Self {
+        Self {
+            block_mmio_called: AtomicBool::new(false),
+            block_mmio_bar_id: core::sync::atomic::AtomicU32::new(0),
+            block_mmio_base_gpa: core::sync::atomic::AtomicU64::new(0),
+            block_mmio_length: core::sync::atomic::AtomicU32::new(0),
+            block_dma_called: AtomicBool::new(false),
+            unblock_mmio_called: AtomicBool::new(false),
+            unblock_dma_called: AtomicBool::new(false),
+        }
+    }
+}
+
+impl TdispResourceValidationInterface for KaniReblockRecordingValidator {
+    fn tdisp_unblock_mmio(
+        &self,
+        _target_vtl: hvdef::Vtl,
+        _device_id: u16,
+        _base_gpa: u64,
+        _base_offset: u32,
+        _length_in_bytes: u32,
+        _range_id: u16,
+    ) -> anyhow::Result<()> {
+        self.unblock_mmio_called.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn tdisp_unblock_dma(&self, _target_vtl: hvdef::Vtl, _device_id: u16) -> anyhow::Result<()> {
+        self.unblock_dma_called.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn tdisp_block_mmio(
+        &self,
+        _target_vtl: hvdef::Vtl,
+        _device_id: u16,
+        base_gpa: u64,
+        _base_offset: u32,
+        length_in_bytes: u32,
+        range_id: u16,
+    ) -> anyhow::Result<()> {
+        self.block_mmio_called.store(true, Ordering::Relaxed);
+        self.block_mmio_bar_id
+            .store(range_id as u32, Ordering::Relaxed);
+        self.block_mmio_base_gpa.store(base_gpa, Ordering::Relaxed);
+        self.block_mmio_length
+            .store(length_in_bytes, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn tdisp_block_dma(&self, _target_vtl: hvdef::Vtl, _device_id: u16) -> anyhow::Result<()> {
+        self.block_dma_called.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn tdisp_query_firmware_tdi_state(
+        &self,
+        _device_id: u16,
+    ) -> anyhow::Result<Option<openhcl_tdisp::TdispTdiState>> {
+        Ok(None)
+    }
+}
+
+/// Drive [`VpciClientTdispState::tdisp_unbind`] from a state that
+/// has one previously-unblocked MMIO BAR (length > 0) and a
+/// symbolic `dma_unblocked_before`. Verify that:
+///
+/// 1. `tdisp_block_mmio` is called with **exactly** the recorded
+///    `(bar_id, base_gpa, length_in_bytes)` of the pre-populated
+///    entry — proving the paravisor cannot "forget" to re-block a
+///    range it previously exposed.
+/// 2. `tdisp_block_dma` is called iff `dma_unblocked_before == true`.
+/// 3. The unblock methods are NEVER called from the unbind path.
+///
+/// These properties hold **regardless of the host's response**.
+/// Even if the host returns Err / a wrong-typed payload / claims a
+/// stale `tdi_state_after`, the re-block step happens up front
+/// (before `send_tdisp_command`) and is best-effort logged but not
+/// gated on the host's reply.
+#[kani::proof]
+#[kani::unwind(2)]
+fn verify_unbind_reblocks_previously_unblocked_resources() {
+    const BAR_ID: u16 = 0;
+    const BASE_GPA: u64 = 0x4000;
+    // Length is symbolic but constrained to be non-zero (otherwise
+    // the production sentinel "length == 0 means classified SHARED,
+    // never unblocked" applies and `block_mmio` is intentionally
+    // skipped — that's a separate property already covered by the
+    // gate harness).
+    let length_in_bytes: u32 = kani::any();
+    kani::assume(length_in_bytes > 0);
+
+    let dma_unblocked_before: bool = kani::any();
+    let tdi_state = any_tdi_state();
+
+    // The host's response can be anything. The re-block step runs
+    // BEFORE `send_tdisp_command`, so it is independent of the
+    // response. Use a fully-symbolic response.
+    let response = any_host_response_with_payload(
+        Response::Unbind(TdispCommandResponseUnbind {}),
+        Response::Bind(TdispCommandResponseBind {}),
+    );
+
+    let recorder: Arc<KaniReblockRecordingValidator> =
+        Arc::new(KaniReblockRecordingValidator::new());
+    let validator: Arc<dyn TdispResourceValidationInterface> = recorder.clone();
+
+    let mut state = VpciClientTdispState::kani_new_for_unbind(
+        tdi_state,
+        BAR_ID,
+        BASE_GPA,
+        length_in_bytes,
+        dma_unblocked_before,
+        response,
+        validator,
+    );
+
+    let _ = kani_run_async!(state, state.tdisp_unbind(TdispGuestUnbindReason::Graceful));
+
+    // Property 1: block_mmio was called with the exact pre-populated
+    // values.
+    assert!(recorder.block_mmio_called.load(Ordering::Relaxed));
+    assert_eq!(
+        recorder.block_mmio_bar_id.load(Ordering::Relaxed),
+        BAR_ID as u32
+    );
+    assert_eq!(
+        recorder.block_mmio_base_gpa.load(Ordering::Relaxed),
+        BASE_GPA
+    );
+    assert_eq!(
+        recorder.block_mmio_length.load(Ordering::Relaxed),
+        length_in_bytes
+    );
+
+    // Property 2: block_dma fired iff dma was previously unblocked.
+    assert_eq!(
+        recorder.block_dma_called.load(Ordering::Relaxed),
+        dma_unblocked_before
+    );
+
+    // Property 3: unblock methods were NEVER called from unbind.
+    assert!(!recorder.unblock_mmio_called.load(Ordering::Relaxed));
+    assert!(!recorder.unblock_dma_called.load(Ordering::Relaxed));
+
+    core::mem::forget(state);
+    core::mem::forget(recorder);
+}
+
+// ----------------------------------------------------------------------------
+// F-11: `isolation_snapshot()` returns `Ready` only when the cached
+// `tdi_state` is `Run`.
+//
+// Per the paravisor TDISP security-properties document:
+//
+//   F-11: `isolation_snapshot()` returns `Ready` only if cached
+//         `tdi_state == Run` ∧ verified report cached ∧
+//         resource-acceptance step has completed for the BARs the
+//         VTL0 guest can address as trusted. (`Locked` is **never**
+//         a safe `Ready` state.)
+//
+// The TDISP §3.2 / PSI-6 / PSI-10 reasoning: only `START_INTERFACE_RESPONSE`
+// success transitions device-side to `RUN`, the first state in which
+// MMIO/DMA accesses from the TDI's trusted side are enforced against the
+// accepted resource set. Reporting `Ready` to VTL0 in `Locked` /
+// `Unlocked` / `Uninitialized` would let VTL0 touch MMIO that is not yet
+// covered by the device's accepted set.
+//
+// **Expected to FAIL today** (audit finding TDISP-008): production
+// `isolation_snapshot()` returns `Ready { ... }` whenever
+// `tdi_report.is_some()`, regardless of `tdi_state`. The harness is
+// the executable spec of the intended behaviour.
+// ----------------------------------------------------------------------------
+
+use crate::tdisp::IsolationSnapshot;
+
+/// Drive [`VpciClientTdispState::isolation_snapshot`] from a fully
+/// symbolic cached `(tdi_state, tdi_report.is_some())` configuration
+/// and assert that `Ready` implies `tdi_state == Run`.
+///
+/// The harness re-uses [`VpciClientTdispState::kani_new_for_mmio_reconfigured`]
+/// because that constructor already exposes both knobs symbolically;
+/// `isolation_snapshot` ignores `validated_mmio_bars`,
+/// `intercepted_bars`, and `dma_unblocked` for this property (they
+/// affect classification but not the `Ready`-vs-`NotReady` decision).
+///
+/// **Expected verification result: FAIL.** Production violates F-11 by
+/// returning `Ready` whenever `tdi_report.is_some()`. Once the F-11
+/// fix lands (`isolation_snapshot` gates `Ready` on
+/// `tdi_state == Run`), this harness should verify.
+#[kani::proof]
+// `isolation_snapshot` iterates over all 6 BARs; CBMC needs N+1 unwindings
+// (7) to discharge the termination assertion on `0..6`.
+#[kani::unwind(7)]
+fn verify_isolation_snapshot_only_ready_when_run() {
+    const BAR_ID: u16 = 0;
+
+    let tdi_state = any_tdi_state();
+    // Always a cached report present; the F-11 obligation is about
+    // `tdi_state`, not about report presence (that's the existing
+    // production gate).
+    let tdi_report = Some(TdiReportStruct {
+        interface_info: TdispTdiReportInterfaceInfo::new(),
+        msi_x_message_control: 0,
+        lnr_control: 0,
+        tph_control: 0,
+        mmio_interface_info: vec![TdispTdiReportMmioInterfaceInfo {
+            first_4k_page_offset: 0,
+            num_4k_pages: 1,
+            flags: TdispTdiReportMmioFlags::new().with_is_non_tee_mem(false),
+            range_id: BAR_ID,
+        }],
+    });
+
+    // The non-tdi_state, non-tdi_report inputs are irrelevant to F-11
+    // — fix them to neutral values to keep the SAT formula small.
+    let validator: Arc<dyn TdispResourceValidationInterface> =
+        Arc::new(KaniRecordingValidator::new());
+    let state = VpciClientTdispState::kani_new_for_mmio_reconfigured(
+        tdi_state, tdi_report, BAR_ID, /* intercepted = */ false,
+        /* validated_already = */ false, /* dma_unblocked_before = */ false, validator,
+    );
+
+    let snapshot = state.isolation_snapshot();
+
+    // F-11: `Ready` ⇒ tdi_state == Run.
+    if matches!(snapshot, IsolationSnapshot::Ready { .. }) {
+        assert_eq!(
+            tdi_state,
+            TdispTdiState::Run,
+            "isolation_snapshot returned Ready while tdi_state is not Run \
+             (audit finding TDISP-008)",
+        );
+    }
+
+    core::mem::forget(state);
+}
+
+// ----------------------------------------------------------------------------
+// F-13: After `tdisp_unbind` returns Ok, the per-bind bookkeeping is
+// fully cleared.
+//
+//   F-13: After `tdisp_unbind` returns `Ok`: `tdi_state == Unassigned`
+//         (mapped to `TdispTdiState::Unlocked` in this codebase),
+//         no cached report is treated as verified, `lock_epoch ==
+//         NO_EPOCH`, `validated_mmio_bars == ∅`, `dma_unblocked == false`.
+//
+// Only the fields that exist in the production state today are
+// asserted on:
+//   - `validated_mmio_bars` cleared.
+//   - `dma_unblocked == false`.
+//   - `tdi_report == None` (the closest analogue to the
+//     "no cached report treated as verified" clause; the production
+//     code lacks an explicit `verified` flag).
+//
+// The `tdi_state == Unlocked` clause is part of F-1 / F-4's strict
+// post-state ideal and is already asserted (and known to FAIL today
+// per TDISP-005) by `verify_unbind_post_check`. It is intentionally
+// NOT re-asserted here so that this harness can isolate the
+// bookkeeping-clear behaviour, which is independent of the post-state
+// gap.
+//
+// **Expected verification result: PASS today.** The production
+// `tdisp_unbind_inner`'s `Ok(_)` arm clears all three observable
+// fields. This harness pins that behaviour down so a future
+// refactor cannot regress F-13 silently.
+// ----------------------------------------------------------------------------
+
+/// Drive [`VpciClientTdispState::tdisp_unbind`] from a state with one
+/// pre-unblocked MMIO BAR, symbolic `dma_unblocked_before`, and a
+/// cached `tdi_report`. Verify that every per-bind bookkeeping field
+/// is cleared on the Ok path, regardless of what the host claimed
+/// for `tdi_state_after`.
+///
+/// Builds on the existing [`KaniReblockRecordingValidator`] but only
+/// reads the post-state of the `VpciClientTdispState`; the validator
+/// is present because `tdisp_unbind_inner`'s re-block loop short-
+/// circuits without it.
+#[kani::proof]
+#[kani::unwind(2)]
+fn verify_unbind_clears_per_bind_bookkeeping() {
+    const BAR_ID: u16 = 0;
+    const BASE_GPA: u64 = 0x4000;
+    let length_in_bytes: u32 = kani::any();
+    kani::assume(length_in_bytes > 0);
+    let dma_unblocked_before: bool = kani::any();
+    let tdi_state = any_tdi_state();
+
+    // Pre-cache an empty TDI report so we can observe whether
+    // `tdisp_unbind` (default variant, clear_cached_report = true)
+    // clears it on Ok. Empty `mmio_interface_info` keeps CBMC reach
+    // bounded.
+    let tdi_report = Some(TdiReportStruct {
+        interface_info: TdispTdiReportInterfaceInfo::new(),
+        msi_x_message_control: 0,
+        lnr_control: 0,
+        tph_control: 0,
+        mmio_interface_info: Vec::new(),
+    });
+
+    let response = any_host_response_with_payload(
+        Response::Unbind(TdispCommandResponseUnbind {}),
+        Response::Bind(TdispCommandResponseBind {}),
+    );
+
+    let recorder: Arc<KaniReblockRecordingValidator> =
+        Arc::new(KaniReblockRecordingValidator::new());
+    let validator: Arc<dyn TdispResourceValidationInterface> = recorder.clone();
+
+    let mut state = VpciClientTdispState::kani_new_for_unbind_with_report(
+        tdi_state,
+        BAR_ID,
+        BASE_GPA,
+        length_in_bytes,
+        dma_unblocked_before,
+        tdi_report,
+        response,
+        validator,
+    );
+
+    let result = kani_run_async!(state, state.tdisp_unbind(TdispGuestUnbindReason::Graceful));
+
+    if result.is_ok() {
+        // F-13 clauses that today's production code can be asked to
+        // honour:
+        assert!(
+            state.kani_validated_mmio_bars_is_empty(),
+            "tdisp_unbind Ok did not clear validated_mmio_bars",
+        );
+        assert!(
+            !state.kani_dma_unblocked(),
+            "tdisp_unbind Ok did not clear dma_unblocked",
+        );
+        assert!(
+            !state.kani_tdi_report_is_some(),
+            "tdisp_unbind Ok did not clear tdi_report",
+        );
+    }
+
+    core::mem::forget(state);
+    core::mem::forget(recorder);
+}
+
+// ----------------------------------------------------------------------------
+// F-14: `tdisp_unbind_preserve_report` semantics.
+//
+//   F-14: `tdisp_unbind_preserve_report` preserves only the report
+//         bytes; it MUST clear the `verified` flag, `accepted_mmio`,
+//         `accepted_dma`, `lock_epoch`, and any cached "Run" indicator.
+//         A preserved report is downgraded to *unverified*; it is
+//         never accepted in a new epoch without re-running F-3 + F-4
+//         against a fresh nonce.
+//
+// Mapped to today's production state:
+//   - report bytes preserved   → `tdi_report.is_some()` after Ok.    [PASS path]
+//   - `accepted_mmio` cleared  → `validated_mmio_bars.is_empty()`.   [PASS path]
+//   - `accepted_dma` cleared   → `dma_unblocked == false`.           [PASS path]
+//   - cached "Run" cleared     → `tdi_state != Run` after Ok.        [FAIL path: TDISP-005]
+//   - `verified` flag cleared, `lock_epoch == NO_EPOCH` — these
+//     fields don't exist in the production state today; covered by
+//     the deferred F-4 spec.
+//
+// **Expected verification result: FAIL** on the "cached Run cleared"
+// clause. The production `send_tdisp_command` updates the cached
+// `tdi_state` directly from the host's claimed `tdi_state_after`, so
+// a malicious host can leave the cache at `Run` after a successful
+// preserve-report unbind. The bookkeeping clauses pass.
+//
+// Composes with F-11 (TDISP-008): if cached `tdi_state == Run` AND
+// preserved report is in cache, `isolation_snapshot()` returns
+// `Ready{...}` against an unbound device.
+// ----------------------------------------------------------------------------
+
+/// Drive [`VpciClientTdispState::tdisp_unbind_preserve_report`] from a
+/// state with one pre-unblocked MMIO BAR, symbolic
+/// `dma_unblocked_before`, and a cached `tdi_report`. Verify that on
+/// Ok: the bookkeeping is cleared, the report is preserved, and the
+/// cached `tdi_state` no longer indicates `Run`.
+#[kani::proof]
+#[kani::unwind(2)]
+fn verify_unbind_preserve_report_semantics() {
+    const BAR_ID: u16 = 0;
+    const BASE_GPA: u64 = 0x4000;
+    let length_in_bytes: u32 = kani::any();
+    kani::assume(length_in_bytes > 0);
+    let dma_unblocked_before: bool = kani::any();
+    let tdi_state = any_tdi_state();
+
+    let tdi_report = Some(TdiReportStruct {
+        interface_info: TdispTdiReportInterfaceInfo::new(),
+        msi_x_message_control: 0,
+        lnr_control: 0,
+        tph_control: 0,
+        mmio_interface_info: Vec::new(),
+    });
+
+    let response = any_host_response_with_payload(
+        Response::Unbind(TdispCommandResponseUnbind {}),
+        Response::Bind(TdispCommandResponseBind {}),
+    );
+
+    let recorder: Arc<KaniReblockRecordingValidator> =
+        Arc::new(KaniReblockRecordingValidator::new());
+    let validator: Arc<dyn TdispResourceValidationInterface> = recorder.clone();
+
+    let mut state = VpciClientTdispState::kani_new_for_unbind_with_report(
+        tdi_state,
+        BAR_ID,
+        BASE_GPA,
+        length_in_bytes,
+        dma_unblocked_before,
+        tdi_report,
+        response,
+        validator,
+    );
+
+    let result = kani_run_async!(
+        state,
+        state.tdisp_unbind_preserve_report(TdispGuestUnbindReason::Graceful)
+    );
+
+    if result.is_ok() {
+        // PASS-path clauses (production already honours these).
+        assert!(
+            state.kani_validated_mmio_bars_is_empty(),
+            "preserve_report Ok did not clear validated_mmio_bars",
+        );
+        assert!(
+            !state.kani_dma_unblocked(),
+            "preserve_report Ok did not clear dma_unblocked",
+        );
+        assert!(
+            state.kani_tdi_report_is_some(),
+            "preserve_report Ok did not preserve tdi_report",
+        );
+        // FAIL-path clause (TDISP-005 / TDISP-008): cached Run
+        // indicator MUST be cleared. Production today leaves it at
+        // whatever the host claimed.
+        assert_ne!(
+            state.kani_tdi_state(),
+            TdispTdiState::Run,
+            "preserve_report Ok left cached tdi_state at Run \
+             (audit findings TDISP-005, TDISP-008)",
+        );
+    }
+
+    core::mem::forget(state);
+    core::mem::forget(recorder);
 }

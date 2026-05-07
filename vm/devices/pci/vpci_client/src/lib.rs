@@ -15,6 +15,9 @@ mod tests;
 #[cfg(kani)]
 pub mod kani_proofs;
 
+#[cfg(test)]
+mod attack_tests;
+
 // ----------------------------------------------------------------------------
 // `tracing` / `tracelimit` shims under Kani.
 //

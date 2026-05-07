@@ -386,7 +386,20 @@ impl VpciClientTdispState {
     }
 
     /// See: [`TdispVirtualDeviceInterface::tdisp_start_device`]
+    #[cfg(not(kani))]
     pub async fn tdisp_start_device(&mut self) -> anyhow::Result<()> {
+        self.tdisp_start_device_inner().await
+    }
+
+    /// Kani forwarder: returns `crate::Result` so the inner body can
+    /// avoid `anyhow::Error` Drop chains that otherwise dominate
+    /// CBMC reachability. See `kani-debugging.md` "anyhow contagion".
+    #[cfg(kani)]
+    pub async fn tdisp_start_device(&mut self) -> crate::Result<()> {
+        self.tdisp_start_device_inner().await
+    }
+
+    async fn tdisp_start_device_inner(&mut self) -> crate::Result<()> {
         let state_before = self.tdi_state();
         let res = self
             .send_tdisp_command(openhcl_tdisp::new_start_tdi_command(self.vpci_device_id))
@@ -402,25 +415,40 @@ impl VpciClientTdispState {
                     state_after = %state_after,
                     "device is in unexpected TDI state after start command, expected Run"
                 );
-                anyhow::bail!(
+                return Err(crate::err!(
                     "device is in unexpected TDI state after start command, expected Run"
-                );
+                ));
             }
         }
 
         match res.response::<TdispCommandResponseStartTdi>() {
             Ok(_) => Ok(()),
-            Err(err) => Err(anyhow::anyhow!(
-                "error response in tdisp_start_device: {err}"
-            )),
+            Err(err) => Err(crate::err!("error response in tdisp_start_device: {err}")),
         }
     }
 
     /// See: [`TdispVirtualDeviceInterface::tdisp_get_device_report`]
+    #[cfg(not(kani))]
     pub async fn tdisp_get_device_report(
         &mut self,
         report_type: &TdispReportType,
     ) -> anyhow::Result<Vec<u8>> {
+        self.tdisp_get_device_report_inner(report_type).await
+    }
+
+    /// Kani forwarder. See `kani-debugging.md` "anyhow contagion".
+    #[cfg(kani)]
+    pub async fn tdisp_get_device_report(
+        &mut self,
+        report_type: &TdispReportType,
+    ) -> crate::Result<Vec<u8>> {
+        self.tdisp_get_device_report_inner(report_type).await
+    }
+
+    async fn tdisp_get_device_report_inner(
+        &mut self,
+        report_type: &TdispReportType,
+    ) -> crate::Result<Vec<u8>> {
         let res = self
             .send_tdisp_command(openhcl_tdisp::new_get_tdi_report_command(
                 self.vpci_device_id,
@@ -430,7 +458,7 @@ impl VpciClientTdispState {
 
         match res.response::<TdispCommandResponseGetTdiReport>() {
             Ok(r) => Ok(r.report_buffer),
-            Err(err) => Err(anyhow::anyhow!(
+            Err(err) => Err(crate::err!(
                 "error response in tdisp_get_device_report: {err}"
             )),
         }
@@ -463,7 +491,16 @@ impl VpciClientTdispState {
     }
 
     /// See: [`TdispVirtualDeviceInterface::tdisp_unbind`]
+    #[cfg(not(kani))]
     pub async fn tdisp_unbind(&mut self, reason: TdispGuestUnbindReason) -> anyhow::Result<()> {
+        self.tdisp_unbind_inner(reason, /* clear_cached_report = */ true)
+            .await
+    }
+
+    /// Kani forwarder for [`Self::tdisp_unbind`]. See
+    /// `kani-debugging.md` "anyhow contagion".
+    #[cfg(kani)]
+    pub async fn tdisp_unbind(&mut self, reason: TdispGuestUnbindReason) -> crate::Result<()> {
         self.tdisp_unbind_inner(reason, /* clear_cached_report = */ true)
             .await
     }
@@ -478,6 +515,7 @@ impl VpciClientTdispState {
     /// is still cleared, since that bookkeeping is specific to a single
     /// bind/attest cycle and will be rebuilt when the guest drives
     /// attestation again.
+    #[cfg(not(kani))]
     pub async fn tdisp_unbind_preserve_report(
         &mut self,
         reason: TdispGuestUnbindReason,
@@ -486,11 +524,24 @@ impl VpciClientTdispState {
             .await
     }
 
+    /// Kani forwarder for [`Self::tdisp_unbind_preserve_report`]. Returns
+    /// `crate::Result<()>` to keep `anyhow::Error` Drop chains
+    /// (`Backtrace`, `dyn std::error::Error`) out of CBMC reachability.
+    /// See `kani-debugging.md` "anyhow contagion".
+    #[cfg(kani)]
+    pub async fn tdisp_unbind_preserve_report(
+        &mut self,
+        reason: TdispGuestUnbindReason,
+    ) -> crate::Result<()> {
+        self.tdisp_unbind_inner(reason, /* clear_cached_report = */ false)
+            .await
+    }
+
     async fn tdisp_unbind_inner(
         &mut self,
         reason: TdispGuestUnbindReason,
         clear_cached_report: bool,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         // Flip all unblocked MMIO ranges and DMA back to shared before
         // we tell the host to unbind the TDI. This is best-effort: a
         // failure here is logged but doesn't abort the unbind, because
@@ -549,7 +600,7 @@ impl VpciClientTdispState {
                 }
                 Ok(())
             }
-            Err(err) => Err(anyhow::anyhow!("error response in tdisp_unbind: {err}")),
+            Err(err) => Err(crate::err!("error response in tdisp_unbind: {err}")),
         }
     }
 
@@ -660,6 +711,9 @@ impl VpciClientTdispState {
         self.tdisp_bind_interface()
             .await
             .context("tdisp_attest_device: failed to bind device interface")?;
+
+        // get report
+        // check report
 
         self.tdisp_start_device()
             .await
@@ -1126,6 +1180,172 @@ impl VpciClientTdispState {
     pub fn kani_dma_unblocked(&self) -> bool {
         self.mutable_state.dma_unblocked
     }
+
+    /// Snapshot of `validated_mmio_bars.is_empty()` for Kani harnesses
+    /// asserting F-13 / F-14 post-conditions on the unbind path.
+    #[cfg(kani)]
+    pub fn kani_validated_mmio_bars_is_empty(&self) -> bool {
+        self.mutable_state.validated_mmio_bars.is_empty()
+    }
+
+    /// Snapshot of `tdi_report.is_some()` for Kani harnesses asserting
+    /// F-13 (full unbind clears report) and F-14
+    /// (`tdisp_unbind_preserve_report` keeps report bytes).
+    #[cfg(kani)]
+    pub fn kani_tdi_report_is_some(&self) -> bool {
+        self.mutable_state.tdi_report.is_some()
+    }
+
+    /// Construct a [`VpciClientTdispState`] for verifying that
+    /// [`Self::tdisp_unbind`] re-blocks every previously-unblocked
+    /// MMIO range plus DMA before sending the host the unbind
+    /// command.
+    ///
+    /// Pre-populates a single `validated_mmio_bars` entry with the
+    /// caller-supplied `bar_id`, `base_gpa`, and `length_in_bytes`
+    /// (mirroring "host previously reconfigured BAR `bar_id` with a
+    /// length-`length_in_bytes` PRIVATE range, paravisor unblocked
+    /// it and recorded it"). The single-entry `BTreeMap` keeps CBMC
+    /// reachability bounded.
+    #[cfg(kani)]
+    pub fn kani_new_for_unbind(
+        tdi_state: TdispTdiState,
+        bar_id: u16,
+        base_gpa: u64,
+        length_in_bytes: u32,
+        dma_unblocked_before: bool,
+        response: GuestToHostResponse,
+        validator: Arc<dyn TdispResourceValidationInterface>,
+    ) -> Self {
+        let mut validated_mmio_bars = MmioBarMap::new();
+        validated_mmio_bars.insert(
+            bar_id,
+            ValidatedMmio {
+                base_gpa,
+                length_in_bytes,
+            },
+        );
+        Self {
+            host_channel: HostChannel::KaniMock(core::cell::Cell::new(Some(response))),
+            vpci_device_id: 0,
+            mutable_state: VpciClientTdispMutableState {
+                tdi_state,
+                guest_device_id: 0,
+                validated_mmio_bars,
+                dma_unblocked: dma_unblocked_before,
+                tdi_report: None,
+                intercepted_bars: BarSet::new(),
+                cached_capabilities: None,
+            },
+            isolation_type: IsolationType::None,
+            vtom: 0,
+            target_vtl: Vtl::Vtl0,
+            resource_validator: Some(validator),
+        }
+    }
+
+    /// Like [`Self::kani_new_for_unbind`] but additionally lets the
+    /// caller pre-populate `tdi_report`, so harnesses for F-13
+    /// (`tdisp_unbind` clears the report) and F-14
+    /// (`tdisp_unbind_preserve_report` keeps it) can observe what
+    /// happens to the report on the Ok path.
+    #[cfg(kani)]
+    pub fn kani_new_for_unbind_with_report(
+        tdi_state: TdispTdiState,
+        bar_id: u16,
+        base_gpa: u64,
+        length_in_bytes: u32,
+        dma_unblocked_before: bool,
+        tdi_report: Option<TdiReportStruct>,
+        response: GuestToHostResponse,
+        validator: Arc<dyn TdispResourceValidationInterface>,
+    ) -> Self {
+        let mut validated_mmio_bars = MmioBarMap::new();
+        validated_mmio_bars.insert(
+            bar_id,
+            ValidatedMmio {
+                base_gpa,
+                length_in_bytes,
+            },
+        );
+        Self {
+            host_channel: HostChannel::KaniMock(core::cell::Cell::new(Some(response))),
+            vpci_device_id: 0,
+            mutable_state: VpciClientTdispMutableState {
+                tdi_state,
+                guest_device_id: 0,
+                validated_mmio_bars,
+                dma_unblocked: dma_unblocked_before,
+                tdi_report,
+                intercepted_bars: BarSet::new(),
+                cached_capabilities: None,
+            },
+            isolation_type: IsolationType::None,
+            vtom: 0,
+            target_vtl: Vtl::Vtl0,
+            resource_validator: Some(validator),
+        }
+    }
+
+    /// Test-only constructor used by the bug-demonstration tests in
+    /// `attack_tests.rs`. Mirrors the production `new` constructor but
+    /// also lets the caller pre-populate the cached `tdi_state`,
+    /// `tdi_report`, `validated_mmio_bars`, and `dma_unblocked` fields
+    /// so each attack scenario can be expressed without having to drive
+    /// the full attestation handshake first.
+    ///
+    /// `validated_mmio_bars` is a list of `(bar_id, base_gpa,
+    /// length_in_bytes)` triples that get inserted into the
+    /// `validated_mmio_bars` map.
+    #[cfg(test)]
+    pub(crate) fn test_new_with_state(
+        worker_req: mesh::Sender<WorkerRequest>,
+        resource_validator: Option<Arc<dyn TdispResourceValidationInterface>>,
+        tdi_state: TdispTdiState,
+        tdi_report: Option<TdiReportStruct>,
+        validated_mmio_bars: Vec<(u16, u64, u32)>,
+        dma_unblocked: bool,
+    ) -> Self {
+        let mut bars = MmioBarMap::new();
+        for (bar_id, base_gpa, length_in_bytes) in validated_mmio_bars {
+            bars.insert(
+                bar_id,
+                ValidatedMmio {
+                    base_gpa,
+                    length_in_bytes,
+                },
+            );
+        }
+        Self {
+            host_channel: HostChannel::Mesh(worker_req),
+            vpci_device_id: 0,
+            mutable_state: VpciClientTdispMutableState {
+                tdi_state,
+                guest_device_id: 0,
+                validated_mmio_bars: bars,
+                dma_unblocked,
+                tdi_report,
+                intercepted_bars: BarSet::new(),
+                cached_capabilities: None,
+            },
+            isolation_type: IsolationType::None,
+            vtom: 0,
+            target_vtl: Vtl::Vtl0,
+            resource_validator,
+        }
+    }
+
+    /// Test-only accessor for the cached `tdi_state`.
+    #[cfg(test)]
+    pub(crate) fn test_tdi_state(&self) -> TdispTdiState {
+        self.mutable_state.tdi_state
+    }
+
+    /// Test-only accessor for the cached `tdi_report.is_some()`.
+    #[cfg(test)]
+    pub(crate) fn test_tdi_report_is_some(&self) -> bool {
+        self.mutable_state.tdi_report.is_some()
+    }
 }
 
 // The `TdispVirtualDeviceInterface` trait impl on `VpciDevice` is
@@ -1158,7 +1378,17 @@ impl TdispVirtualDeviceInterface for VpciDevice {
 
     async fn tdisp_start_device(&self) -> anyhow::Result<()> {
         let mut guard = self.tdisp.0.lock().await;
-        guard.tdisp_start_device().await
+        #[cfg(not(kani))]
+        {
+            guard.tdisp_start_device().await
+        }
+        #[cfg(kani)]
+        {
+            guard
+                .tdisp_start_device()
+                .await
+                .map_err(|_| anyhow::anyhow!("tdisp_start_device failed"))
+        }
     }
 
     async fn tdisp_get_device_report(
@@ -1166,7 +1396,17 @@ impl TdispVirtualDeviceInterface for VpciDevice {
         report_type: &TdispReportType,
     ) -> anyhow::Result<Vec<u8>> {
         let mut guard = self.tdisp.0.lock().await;
-        guard.tdisp_get_device_report(report_type).await
+        #[cfg(not(kani))]
+        {
+            guard.tdisp_get_device_report(report_type).await
+        }
+        #[cfg(kani)]
+        {
+            guard
+                .tdisp_get_device_report(report_type)
+                .await
+                .map_err(|_| anyhow::anyhow!("tdisp_get_device_report failed"))
+        }
     }
 
     async fn tdisp_get_tdi_report(&self) -> anyhow::Result<TdiReportStruct> {
@@ -1181,7 +1421,17 @@ impl TdispVirtualDeviceInterface for VpciDevice {
 
     async fn tdisp_unbind(&self, reason: TdispGuestUnbindReason) -> anyhow::Result<()> {
         let mut guard = self.tdisp.0.lock().await;
-        guard.tdisp_unbind(reason).await
+        #[cfg(not(kani))]
+        {
+            guard.tdisp_unbind(reason).await
+        }
+        #[cfg(kani)]
+        {
+            guard
+                .tdisp_unbind(reason)
+                .await
+                .map_err(|_| anyhow::anyhow!("tdisp_unbind failed"))
+        }
     }
 }
 
@@ -1318,7 +1568,17 @@ impl TdispVpciAttestationInterface for VpciDevice {
         reason: TdispGuestUnbindReason,
     ) -> anyhow::Result<()> {
         let mut guard = self.tdisp.0.lock().await;
-        guard.tdisp_unbind_preserve_report(reason).await
+        #[cfg(not(kani))]
+        {
+            guard.tdisp_unbind_preserve_report(reason).await
+        }
+        #[cfg(kani)]
+        {
+            guard
+                .tdisp_unbind_preserve_report(reason)
+                .await
+                .map_err(|_| anyhow::anyhow!("tdisp_unbind_preserve_report failed"))
+        }
     }
 }
 
