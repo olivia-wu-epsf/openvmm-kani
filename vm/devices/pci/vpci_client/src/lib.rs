@@ -15,6 +15,9 @@ mod tests;
 #[cfg(kani)]
 pub mod kani_proofs;
 
+#[cfg(kani)]
+pub mod kani_proofs_highlevel;
+
 #[cfg(test)]
 mod attack_tests;
 
@@ -133,11 +136,77 @@ pub use err_shim::Result;
 
 pub use tdisp::VpciClientTdispState;
 
+// ----------------------------------------------------------------------------
+// Mutex shims under Kani.
+//
+// `parking_lot::Mutex::new` and `futures::lock::Mutex::new` both pull
+// in `parking_lot_core::HashTable::new` -> `std::thread::Inner` ->
+// `pthread_key_create`, which CBMC refuses to bound. Under `cfg(kani)`
+// the harness is single-threaded, so a `RefCell`-backed shim is sound
+// and keeps the production type-checking and call sites unchanged.
+//
+// Both `SyncMutex::lock` and `AsyncMutex::lock` return a guard that
+// behaves like the production `MutexGuard`/`MutexGuardFuture` output;
+// `AsyncMutex::lock().await` resolves immediately. See the matching
+// scaffolding for `HostChannel::KaniMock` and `err_shim` and the
+// model-checking SKILL anti-pattern playbook.
+#[cfg(kani)]
+mod kani_mutex_shim {
+    use inspect::Inspect;
+    use std::sync::Mutex;
+    use std::sync::MutexGuard;
+
+    /// Sync-mutex shim used in place of `parking_lot::Mutex` under Kani.
+    /// Backed by `std::sync::Mutex`, which (unlike `parking_lot::Mutex`)
+    /// does not statically pull `parking_lot_core::HashTable::new` →
+    /// `pthread_key_create` into reachability. The crate is
+    /// `#![forbid(unsafe_code)]`, so a `RefCell`-based shim cannot be
+    /// declared `Sync`; `std::sync::Mutex` provides `Sync` natively.
+    pub struct SyncMutex<T>(Mutex<T>);
+
+    impl<T> SyncMutex<T> {
+        pub fn new(value: T) -> Self {
+            Self(Mutex::new(value))
+        }
+        pub fn lock(&self) -> MutexGuard<'_, T> {
+            self.0.lock().expect("poisoned mutex under Kani")
+        }
+    }
+
+    impl<T> Inspect for SyncMutex<T> {
+        fn inspect(&self, _req: inspect::Request<'_>) {}
+    }
+
+    /// Async-mutex shim used in place of `futures::lock::Mutex` under
+    /// Kani. Internally a `std::sync::Mutex`; `lock().await` resolves
+    /// immediately because the harness is single-threaded.
+    pub struct AsyncMutex<T>(Mutex<T>);
+
+    impl<T> AsyncMutex<T> {
+        pub fn new(value: T) -> Self {
+            Self(Mutex::new(value))
+        }
+        pub async fn lock(&self) -> MutexGuard<'_, T> {
+            self.0.lock().expect("poisoned mutex under Kani")
+        }
+        pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
+            self.0.try_lock().ok()
+        }
+    }
+}
+
+#[cfg(kani)]
+use kani_mutex_shim::AsyncMutex as KaniAsyncMutex;
+#[cfg(kani)]
+use kani_mutex_shim::SyncMutex as KaniSyncMutex;
+
 // Bring the real `anyhow::Context` trait into scope under its own
 // name so the many `.context("...")?` call sites in this file resolve.
 // Production builds re-export the same trait; under `cfg(kani)` the
 // trait method calls still type-check (they end up returning
 // `anyhow::Result<T>`, which production signatures still use).
+#[cfg(kani)]
+use KaniSyncMutex as Mutex;
 use anyhow::Context as _;
 use futures::FutureExt;
 use futures::Stream;
@@ -152,6 +221,7 @@ use openhcl_tdisp::GuestToHostResponse;
 use openhcl_tdisp::TdispResourceValidationInterface;
 use pal_async::task::Spawn;
 use pal_async::task::Task;
+#[cfg(not(kani))]
 use parking_lot::Mutex;
 use pci_core::spec::cfg_space::Command;
 use pci_core::spec::cfg_space::HeaderType00;
@@ -311,8 +381,22 @@ pub trait MemoryAccess: Send {
 /// The amount of MMIO space required by the VPCI bus.
 pub const MMIO_SIZE: u64 = 0x2000;
 
+#[cfg(not(kani))]
 struct InspectableAsyncMutex<T>(futures::lock::Mutex<T>);
+#[cfg(kani)]
+struct InspectableAsyncMutex<T>(KaniAsyncMutex<T>);
 
+#[cfg(not(kani))]
+impl<T: Inspect> Inspect for InspectableAsyncMutex<T> {
+    fn inspect(&self, req: inspect::Request<'_>) {
+        match self.0.try_lock() {
+            Some(guard) => guard.inspect(req),
+            None => req.value("locked"),
+        }
+    }
+}
+
+#[cfg(kani)]
 impl<T: Inspect> Inspect for InspectableAsyncMutex<T> {
     fn inspect(&self, req: inspect::Request<'_>) {
         match self.0.try_lock() {
@@ -440,10 +524,12 @@ impl ConfigSpaceAccessor {
 #[derive(Inspect)]
 struct InUseDevice {
     #[inspect(skip)]
+    #[cfg(not(kani))]
     req: mesh::Sender<WorkerRequest>,
     id: DeviceId,
 }
 
+#[cfg(not(kani))]
 impl Drop for InUseDevice {
     fn drop(&mut self) {
         self.req.send(WorkerRequest::Done(self.id));
@@ -851,6 +937,16 @@ impl VpciDevice {
             ?state,
             "tdisp_on_device_deactivate: guest disabled MMIO, preserve-report unbinding TDI"
         );
+        // Under Kani, bypass the trait dispatch and call the inner
+        // `tdisp_unbind_preserve_report` directly. The trait method
+        // returns `anyhow::Result<()>`; the cfg(kani) bridge in
+        // `tdisp.rs` constructs an `anyhow::Error` via `anyhow::anyhow!`
+        // which captures a `Backtrace` whose Drop chain dominates CBMC
+        // reachability. Calling the inner method directly returns
+        // `crate::Result<()>` (the err_shim variant) and avoids the
+        // backtrace entirely. The semantics are identical because the
+        // trait impl simply locks the same async-mutex and forwards.
+        #[cfg(not(kani))]
         if let Err(err) = self
             .tdisp_unbind_preserve_report(TdispGuestUnbindReason::Graceful)
             .await
@@ -860,6 +956,98 @@ impl VpciDevice {
                 "tdisp_on_device_deactivate: preserve-report unbind failed"
             );
         }
+        #[cfg(kani)]
+        {
+            let mut guard = self.tdisp.0.lock().await;
+            let _ = guard
+                .tdisp_unbind_preserve_report(TdispGuestUnbindReason::Graceful)
+                .await;
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Kani-only constructors for `VpciDevice` and friends.
+//
+// The production `VpciDeviceDescription::init` constructor relies on
+// the mesh runtime, which is gated out under `cfg(kani)`. The Kani
+// harnesses in `kani_proofs.rs` use these constructors to instantiate
+// a `VpciDevice` whose mutex chain (parking_lot / futures::lock) is
+// replaced by `std::sync::Mutex` shims (see `kani_mutex_shim` above)
+// so the high-level public API methods can be exercised under CBMC
+// without dragging in `pthread_key_create`.
+#[cfg(kani)]
+struct KaniNoopMemoryAccess;
+
+#[cfg(kani)]
+impl MemoryAccess for KaniNoopMemoryAccess {
+    fn gpa(&mut self) -> u64 {
+        0
+    }
+    fn read(&mut self, _addr: u64) -> u32 {
+        0
+    }
+    fn write(&mut self, _addr: u64, _value: u32) {}
+}
+
+#[cfg(kani)]
+impl VpciDevice {
+    /// Construct a [`VpciDevice`] for Kani harnesses driving the
+    /// public [`Self::tdisp_on_device_activate`] /
+    /// [`Self::tdisp_on_device_deactivate`] surface. The TDISP state
+    /// is supplied by the caller (typically built via
+    /// [`VpciClientTdispState::kani_new_with_response`] or its
+    /// unbind-flavored peer) and wrapped in the `cfg(kani)`
+    /// async-mutex shim. All other fields are filled with neutral
+    /// placeholders: `bar_masks` and `bar_rao` are zero (so the
+    /// activate path's BAR-iteration loop is a no-op), `shadows`
+    /// starts with a cleared `Command` register, and `config_space`
+    /// is backed by [`KaniNoopMemoryAccess`] so any
+    /// `clear_command_register` write is harmlessly discarded.
+    pub fn kani_new(tdisp_state: VpciClientTdispState) -> Self {
+        let config_space = Arc::new(Mutex::new(ConfigSpaceAccessor {
+            mem: Box::new(KaniNoopMemoryAccess),
+            base_gpa: 0,
+            current_slot: SlotNumber::from_bits(0),
+            slot_seq: Vec::new(),
+        }));
+        Self {
+            hw_ids: HardwareIds {
+                vendor_id: 0,
+                device_id: 0,
+                revision_id: 0,
+                prog_if: pci_core::spec::hwid::ProgrammingInterface::NONE,
+                sub_class: pci_core::spec::hwid::Subclass::NONE,
+                base_class: pci_core::spec::hwid::ClassCode::UNCLASSIFIED,
+                type0_sub_vendor_id: 0,
+                type0_sub_system_id: 0,
+            },
+            config_space,
+            numa_node: 0,
+            serial_num: 0,
+            dev: InUseDevice {
+                id: DeviceId {
+                    slot: SlotNumber::from_bits(0),
+                    seq: 0,
+                },
+            },
+            shadows: Mutex::new(ConfigSpaceShadows {
+                command: Command::new(),
+                bars: [0; 6],
+            }),
+            bar_masks: [0; 6],
+            bar_rao: [0; 6],
+            tdisp: InspectableAsyncMutex(KaniAsyncMutex::new(tdisp_state)),
+        }
+    }
+
+    /// Kani-only sync accessor that grabs the inner TDISP state for
+    /// post-condition assertions in harnesses. The async-mutex shim's
+    /// `try_lock` always succeeds under CBMC because the harness is
+    /// single-threaded; the `Option` return mirrors the production
+    /// `try_lock` API but is in practice always `Some`.
+    pub fn __kani_tdisp_try_lock(&self) -> Option<std::sync::MutexGuard<'_, VpciClientTdispState>> {
+        self.tdisp.0.try_lock()
     }
 }
 
@@ -875,6 +1063,7 @@ struct VectorTooLarge(u32);
 #[error("invalid processor number: {0}")]
 struct InvalidProcessor(u32);
 
+#[cfg(not(kani))]
 impl MapVpciInterrupt for VpciDevice {
     async fn register_interrupt(
         &self,
