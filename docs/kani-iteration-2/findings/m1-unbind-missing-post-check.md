@@ -7,11 +7,16 @@ on `Ok` of `tdisp_unbind`).
 **Harnesses:** [vm/devices/pci/vpci_client/src/kani_proofs_session.rs](../../../vm/devices/pci/vpci_client/src/kani_proofs_session.rs)
 - `m1_unbind_ok_implies_state_unlocked` — failed in 6.2 s, 1/971 checks.
 - `m1_unbind_preserve_ok_implies_state_unlocked` — failed in 7.3 s, 1/395 checks.
+- `m_relay_1_deactivate_post_state_is_unlocked_or_uninitialized` — failed in 31 s. **Relay-side corroboration**: drives the same bug through `VpciDevice::tdisp_on_device_deactivate` (the public entrypoint the relay's MMIO-disable edge calls).
+- `m_relay_2_focused_unblock_mmio_against_poisoned_run_cache` — failed in 2.6 s. **Chain-of-custody-bypass corroboration**: with a poisoned-`Run` cache and a stale cached report, `tdisp_on_mmio_reconfigured` calls `validator.tdisp_unblock_mmio` against attacker-controlled `(base, length)` without any fresh attestation. This is the precise downstream consequence of the missing post-check that AF-iter2-1's exploit relies on.
 
-Both failures share root cause: `tdisp_unbind_inner` is the shared
+All four failures share root cause: `tdisp_unbind_inner` is the shared
 implementation behind both `tdisp_unbind` and
-`tdisp_unbind_preserve_report`, and neither wrapper would catch a
-local-only fix to the other.
+`tdisp_unbind_preserve_report`. The two `m_relay_*` harnesses
+demonstrate that the bug is reachable through the same public
+entrypoints that `vpci_relay`'s MMIO-disable / MMIO-enable edges
+drive in production. A local-only fix to one wrapper would not
+catch the bug at the relay surface.
 
 **Severity:** high (confidentiality breach on non-SEV-TIO platforms;
 DoS-only on SEV-TIO via external PSP backstop).

@@ -7,9 +7,12 @@ are **state-machine, ordering, and cache invariants enforced or
 claimed by the relay itself** — not delegations to `vpci_client`'s
 per-method invariants already covered by M-1..M-10.
 
-These are **not yet implemented as Kani harnesses**. They are
-exploration outputs from the OpenHCL expert; concrete harness
-authoring is deferred.
+**Status.** Two relay-side properties (M-relay-1, M-relay-2-focused)
+have been implemented as Kani harnesses. **Both fail.** Both
+failures are second corroborations of AF-iter2-1, viewed at
+different surfaces (the relay-side deactivate edge for M-relay-1,
+and the chain-of-custody bypass on `tdisp_on_mmio_reconfigured` for
+M-relay-2-focused). The remaining 8 are not yet implemented.
 
 ## Source-of-truth restriction
 
@@ -36,7 +39,65 @@ from `vpci_relay`:
 | `tdisp_try_isolation_snapshot()` | `tdisp_isolation_report` (sync, from `vpci` server's `QueryIsolatedResources` handler) | [lib.rs#L633](../../vm/devices/pci/vpci_relay/src/lib.rs#L633) |
 | `mark_bar_intercepted` / `is_bar_intercepted` / `tdisp_on_mmio_reconfigured` | **Not called from vpci_relay** — driven internally from `tdisp_on_device_activate` ([vpci_client/src/lib.rs#L900-L935](../../vm/devices/pci/vpci_client/src/lib.rs#L900)) | — |
 
-## Verification opportunities
+## Implemented harnesses
+
+### M-relay-1 — `m_relay_1_deactivate_post_state_is_unlocked_or_uninitialized`
+
+**Status: ❌ FAILED in 31 s — second corroboration of AF-iter2-1.**
+
+Drives `VpciDevice::tdisp_on_device_deactivate` from a `Run` cache
+with the host channel returning a wire-valid `Unbind` response with
+`result=Success` and `tdi_state_after=Run`. Asserts the post-state
+cache is in `{Unlocked, Uninitialized}`. Fails because
+`tdisp_unbind_inner` lacks the M-1 post-check, so the host's
+chosen `tdi_state_after = Run` propagates through the cache.
+
+OpenHCL-expert review verdict: **Adequate.** Pre-state choice
+covers the only relay-driven attack window
+([vpci_relay/src/lib.rs#L721-L753](../../vm/devices/pci/vpci_relay/src/lib.rs#L721-L753));
+no implicit exclusions; assertion correctly forbids `Run`/`Locked`.
+
+### M-relay-2-focused — `m_relay_2_focused_unblock_mmio_against_poisoned_run_cache`
+
+**Status: ❌ FAILED in 2.6 s — chain-of-custody-bypass leg of AF-iter2-1.**
+
+Pre-state: AF-iter2-1's attack configuration. Cache says `Run`
+(host-poisoned via a malicious Unbind reply); cycle-N `tdi_report`
+is preserved (preserve-report unbind kept it); the targeted BAR is
+PRIVATE-classified. Drives `tdisp_on_mmio_reconfigured(bar, base,
+length)` with attacker-controlled `base`/`length`. Asserts the
+recording validator's `unblock_mmio_calls` and `unblock_dma_calls`
+are both 0.
+
+Fails because the only gate on the unblock path is `state != Run`
+(which AF-iter2-1 lets the host falsify) and the stale cached
+report still classifies the BAR as PRIVATE. **The relay-driven
+end-to-end harness via `VpciDevice::tdisp_on_device_activate` was
+attempted first and was rejected by the OpenHCL expert as
+inadequate** — the cfg(kani) BAR-loop elision at
+[vpci_client/src/lib.rs#L836-L842](../../vm/devices/pci/vpci_client/src/lib.rs#L836-L842)
+makes the orchestration-level form vacuously satisfied. The focused
+per-method form is strictly more diagnostic of the chain-of-custody
+bypass.
+
+OpenHCL-expert review verdict: **Adequate.**
+
+## Verification opportunities (full catalog with status)
+
+| # | Property (one-sentence falsifiable) | Status |
+|---|---|---|
+| **M-relay-1** | After `tdisp_on_device_deactivate` returns successfully, the cached `tdi_state` must be in `{Unlocked, Uninitialized}`; never `Run` or `Locked`. | ❌ **VERIFIED FAILED** — corroborates AF-iter2-1. |
+| **M-relay-2** | The MMIO-enable activate path must NEVER call `tdisp_on_mmio_reconfigured` without first having issued (within the same activate call) at least one of `query_capabilities` followed by `bind/start/get_tdi_report`. | ❌ **VERIFIED FAILED** (focused per-method form on `tdisp_on_mmio_reconfigured`) — corroborates AF-iter2-1's chain-of-custody-bypass leg. End-to-end form via `tdisp_on_device_activate` is inadequate (cfg(kani) elides BAR loop). |
+| **M-relay-3** | The deferred cfg-write on the MMIO-disable edge must always observe `tdisp_on_device_deactivate` having completed before the cfg write reaches the host. | not implemented (vpci_relay-side; ordering harness needs `PollDevice` plumbing). |
+| **M-relay-4** | `RelayedVpciDevice::pending` holds at most ONE in-flight TDISP future. | not implemented (vpci_relay-side). |
+| **M-relay-5** | `RelayedVpciDevice::tdisp_isolation_report` must NEVER block and must NEVER return `Ready` when `tdi_report` is absent. | partial: the non-blocking + report-gating logic on `IsolationSnapshot` is verified by M-8a `m8a_isolation_snapshot_is_pure_no_validator_calls`. The relay-side shim adds nothing semantically. |
+| **M-relay-6** | `RelayedDevice::remove`'s teardown unbind must be issued exactly when `tdi_state != Uninitialized` at entry; teardown ordering matters. | not implemented (vpci_relay-side). |
+| **M-relay-7** | If `tdisp_unbind_preserve_report` after the proactive attest *fails*, the relay must NOT insert the device with stale `tdi_state == Run` and `tdi_report`. | not implemented (vpci_relay-side; needs Kani-compatible build of the relay crate). **Code-grep confirms the bug**: [lib.rs#L416-L420](../../vm/devices/pci/vpci_relay/src/lib.rs#L416) only logs and continues on `Err`. |
+| **M-relay-8** | `pci_cfg_write` must invoke a TDISP edge handler exactly once per *true* `mmio_enabled` transition. | not implemented (vpci_relay-side). |
+| **M-relay-9** | `tdisp_isolation_report` reply must ONLY classify a BAR as `PRIVATE` when the activate path will actually re-attest. | partial: snapshot leg covered by M-8a; cross-check against `tdisp_on_mmio_reconfigured` is implicit in the M-relay-2-focused harness above. |
+| **M-relay-10** | TOCTOU between guest-visible cfg state and TDISP-visible RMP state on the enable arm. | not implemented (vpci_relay-side). |
+
+## Verification opportunities (detailed)
 
 | # | Property (one-sentence falsifiable) | Symbolize | Drives entry-point | Severity |
 |---|---|---|---|---|
@@ -73,13 +134,10 @@ TVM-mandatory or only defense-in-depth:
 
 If iteration 3 picks up M-relay-N:
 
-- **First**: M-relay-1 (the missing post-check; same finding as
-  AF-iter2-1 viewed through the relay surface).
-- **Second**: M-relay-7 (relay's `relay_vpci_bus` error-path
-  swallowing is a same-class exploit independent of AF-iter2-1).
-- **Third**: M-relay-2 + M-relay-9 (the chain-of-custody +
-  isolation-snapshot honesty pair).
+- **Done in iteration 2**: M-relay-1 (verified failed), M-relay-2-focused (verified failed). Both corroborate AF-iter2-1.
+- **First**: M-relay-7 (relay's `relay_vpci_bus` error-path swallowing is a same-class exploit independent of AF-iter2-1). Requires Kani-compatible build of `vpci_relay` crate.
+- **Second**: M-relay-3 / M-relay-10 (deferred-write ordering and TOCTOU between cfg-write and RMP state).
+- **Third**: M-relay-4 (`pending` slot stacking) and M-relay-6 (teardown ordering).
 
-The remaining (M-relay-3..6, 8, 10) are useful defense-in-depth
-hygiene targets but are not on the critical path of any current
-finding.
+The remaining (M-relay-5 + M-relay-9) are partially covered by
+M-8a; M-relay-8 is a low-medium hygiene target.

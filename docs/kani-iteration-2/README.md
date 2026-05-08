@@ -37,8 +37,8 @@ pair are the recommended priorities for a future iteration.
 
 ## Summary
 
-- **17 harnesses verified** across properties M-1, M-3, M-4, M-5, M-6, M-7 (unbind), M-8a, M-10.
-- **1 true-positive finding** (AF-iter2-1: M-1 unbind post-state check missing). Two harnesses fail with the same root cause.
+- **19 harnesses verified** across properties M-1, M-3, M-4, M-5, M-6, M-7 (unbind), M-8a, M-10, **M-relay-1, M-relay-2-focused**.
+- **1 true-positive finding** (AF-iter2-1: M-1 unbind post-state check missing). Four harnesses fail with the same root cause: the two M-1 unbind variants and the two relay-side corroborations (M-relay-1, M-relay-2-focused).
 - **2 false-positive harnesses** for M-7 (request-side variant): adjudicated by skill-restricted expert debate. Spec text (§11.3.1 Table 3 + §11.3.8/14/16/17 + §11.5/§11.6.3) places the source-state legality obligation on the device (DSM), not the requester (TVM). Removed from the harness file.
 - **2 properties deferred** because CBMC OOMs on multi-call orchestration (M-3 attest leg + M-9 attest Ok leg). Behavioral coverage via M-3 negative trio + M-1 Start + static observation.
 - **1 property dropped (purity sub-check of M-8a)** because CBMC OOMs on the 6×BTreeMap-traversal path.
@@ -47,5 +47,5 @@ pair are the recommended priorities for a future iteration.
 
 | ID | Property | Verdict | Severity | File |
 |---|---|---|---|---|
-| AF-iter2-1 | M-1 (Unbind post-state check missing) | TRUE POSITIVE | high | [findings/m1-unbind-missing-post-check.md](findings/m1-unbind-missing-post-check.md) |
+| AF-iter2-1 | M-1 (Unbind post-state check missing); same root cause manifests at relay-driven entrypoints (M-relay-1, M-relay-2-focused) | TRUE POSITIVE | high | [findings/m1-unbind-missing-post-check.md](findings/m1-unbind-missing-post-check.md) |
 | — | M-7 request-side (Bind/Start pre-check) | FALSE POSITIVE (adjudicated) | n/a | [findings/m7-request-side-adjudication.md](findings/m7-request-side-adjudication.md) |

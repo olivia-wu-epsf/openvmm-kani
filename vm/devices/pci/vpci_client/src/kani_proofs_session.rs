@@ -19,6 +19,7 @@
 
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+use crate::VpciDevice;
 use crate::tdisp::IsolationSnapshot;
 use crate::tdisp::KANI_AUDIT_TRAIL_LEN;
 use crate::tdisp::VpciClientTdispState;
@@ -1150,5 +1151,129 @@ fn m10_mark_bar_intercepted_persists_across_unbind_preserve() {
     let _ = poll_once!(s.tdisp_unbind_preserve_report(reason));
 
     assert!(s.is_bar_intercepted(bar_id));
+    core::mem::forget(s);
+}
+
+// ===============================================================
+// M-relay-1 — After `VpciDevice::tdisp_on_device_deactivate`
+// returns, the cached `tdi_state` must be in
+// {Unlocked, Uninitialized}; never Run or Locked.
+//
+// `tdisp_on_device_deactivate` is the public API the relay drives
+// from its MMIO-disable edge. It internally reads
+// `tdisp_tdi_state()` and, if the cache says `Run`, calls
+// `tdisp_unbind_preserve_report(Graceful)`. Per the spec
+// (§11.2 Figure 11-5), `STOP_INTERFACE_REQUEST` unconditionally
+// transitions the TDI to `CONFIG_UNLOCKED`. The TVM's cache must
+// reflect that on Ok.
+//
+// This harness drives the deactivate path through the same
+// `VpciDevice::kani_new` constructor the existing infrastructure
+// provides. Under AF-iter2-1, this should FAIL by exposing the
+// relay-side manifestation of the missing post-check (the host's
+// chosen `tdi_state_after = Run` propagates through the inner
+// `tdisp_unbind_preserve_report`, which clears `validated_mmio_bars`
+// + `dma_unblocked` but leaves the cached `tdi_state` at the
+// host-supplied poison).
+// ===============================================================
+
+#[kani::proof]
+#[kani::unwind(2)]
+fn m_relay_1_deactivate_post_state_is_unlocked_or_uninitialized() {
+    // Pre-state: Run (only state in which deactivate proceeds).
+    // Other pre-states cause an early return with no cache change,
+    // which trivially satisfies the post-condition.
+    let response = any_unbind_response();
+    let tdisp = VpciClientTdispState::kani_new_with_response(TdispTdiState::Run, response);
+    let device = VpciDevice::kani_new(tdisp);
+
+    poll_once!(device.tdisp_on_device_deactivate());
+
+    // Read the post-state via the Kani-only sync accessor.
+    let guard = device
+        .__kani_tdisp_try_lock()
+        .expect("kani harness is single-threaded; try_lock must succeed");
+    let post = guard.kani_tdi_state();
+    drop(guard);
+
+    // Spec: STOP -> CONFIG_UNLOCKED unconditionally.
+    // Uninitialized is the no-op pre-state (covered by the early
+    // return). Both are acceptable post-states; Run and Locked
+    // are not.
+    assert!(matches!(
+        post,
+        TdispTdiState::Unlocked | TdispTdiState::Uninitialized
+    ));
+
+    core::mem::forget(device);
+}
+
+// ===============================================================
+// M-relay-2 — `VpciDevice::tdisp_on_device_activate` must NEVER
+// reach `tdisp_on_mmio_reconfigured` from the BAR-iteration loop
+// without having issued (within the same activate call) a fresh
+// `query_capabilities + tdisp_attest_device` chain. In code, this
+// is the property that the activate path's `state != Run` gate at
+// [vpci_client/src/lib.rs#L843-L876] does NOT fire `tdisp_unblock_*`
+// for a BAR if attestation didn't run in this call.
+//
+// Falsification mode: pre-state = Run with a cached `tdi_report`
+// from a prior cycle (the "preserve-report unbind" leftover that
+// AF-iter2-1 reaches). If the activate path skips attestation and
+// dives into the BAR loop with the stale report, this exposes the
+// chain-of-custody-bypass leg of AF-iter2-1's exploit.
+//
+// **OpenHCL expert review (round 1):** an end-to-end harness over
+// `tdisp_on_device_activate` is BOTH (a) Kani-intractable
+// (CBMC OOMs on the activate-path orchestration plumbing) and (b)
+// vacuously satisfied because `cfg(kani)` elides the BAR loop at
+// [vpci_client/src/lib.rs#L836-L842](../../vm/devices/pci/vpci_client/src/lib.rs#L836).
+// The expert recommended a focused per-method harness on
+// `tdisp_on_mmio_reconfigured` directly, with the cache pre-poisoned
+// to the AF-iter2-1 attack configuration. That focused harness is
+// implemented below as `m_relay_2_focused_*` and is strictly more
+// diagnostic of the chain-of-custody-bypass claim.
+// ===============================================================
+
+#[kani::proof]
+#[kani::unwind(2)]
+fn m_relay_2_focused_unblock_mmio_against_poisoned_run_cache() {
+    // Pre-state: AF-iter2-1's attack configuration. Cache says
+    // `Run` (host-poisoned via a malicious Unbind reply). A
+    // cycle-N `tdi_report` is still present (the preserve-report
+    // unbind kept it). The targeted BAR is PRIVATE-classified
+    // (in-report, !is_non_tee_mem, !intercepted, !validated).
+    let bar_id: u16 = kani::any();
+    kani::assume(bar_id < 6);
+    let report = Some(any_report_one_range(
+        bar_id, /* is_non_tee_mem */ false, /* msix_table */ false,
+        /* msix_pba */ false,
+    ));
+
+    let validator = Arc::new(RecValidator::new());
+    let validator_dyn: Arc<dyn TdispResourceValidationInterface> = validator.clone();
+    let mut s = VpciClientTdispState::kani_new_for_mmio_reconfigured(
+        TdispTdiState::Run,
+        report,
+        bar_id,
+        /* intercepted */ false,
+        /* validated_already */ false,
+        /* dma_unblocked_before */ false,
+        validator_dyn,
+    );
+
+    // Attacker-controlled BAR shadow (host-relayed cfg writes
+    // populate these in production).
+    let base: u64 = kani::any();
+    let len: u32 = kani::any();
+    let _ = s.tdisp_on_mmio_reconfigured(bar_id, base, len);
+
+    // PROPERTY: chain-of-custody — without a same-call fresh
+    // `bind/start/get_tdi_report` cycle (which `tdisp_on_mmio_reconfigured`
+    // does NOT issue, by design), no PRIVATE-classification
+    // unblock should fire. This will FAIL today: the only gate
+    // is `state != Run`, which AF-iter2-1 lets the host falsify.
+    assert!(validator.unblock_mmio_calls.load(Ordering::SeqCst) == 0);
+    assert!(validator.unblock_dma_calls.load(Ordering::SeqCst) == 0);
     core::mem::forget(s);
 }
