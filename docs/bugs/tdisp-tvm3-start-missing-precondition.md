@@ -4,6 +4,15 @@
 **Discovered by:** Kani harness `verify_tvm3_start_only_from_locked` in
 [vm/devices/pci/vpci_client/src/kani_proofs.rs](../vm/devices/pci/vpci_client/src/kani_proofs.rs)
 (VERIFICATION FAILED in 16.9 s).
+**Public-API coverage:** A counterpart harness driving
+`VpciDevice::tdisp_on_device_activate` is **not yet present**. Same
+blockers as TVM-1 / TVM-2: the activate path issues START only as
+the fourth step of a multi-command attest cycle, requiring a
+multi-shot symbolic `KaniMock`, a cfg(kani) shim for the
+`dev_snp_ohcl_tio_support` feature gate, and a cfg(kani) bypass for
+the Vec-parsing TDI-report deserializer. The precondition-gate
+property is currently verified only at the
+`VpciClientTdispState::tdisp_start_device` primitive layer.
 **Spec basis:** PCI-SIG TDISP v2022-07-27 §11.3.1 Table 3, §11.3.14,
 §11.3.9, §11.6.3.
 

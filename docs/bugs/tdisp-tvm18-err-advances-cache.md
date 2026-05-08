@@ -1,9 +1,19 @@
 # TDISP-TVM-18 — `send_tdisp_command` advances cached `tdi_state` on a non-Success host response
 
 **Status:** open
-**Discovered by:** Kani harness `verify_tvm18_err_response_does_not_advance_cache_on_bind` in
+**Discovered by (low-level harness):** Kani harness
+`verify_tvm18_err_response_does_not_advance_cache_on_bind` in
 [vm/devices/pci/vpci_client/src/kani_proofs.rs](../vm/devices/pci/vpci_client/src/kani_proofs.rs)
-(VERIFICATION FAILED in 10.2 s).
+(VERIFICATION FAILED in 10.2 s) — drives the internal
+`VpciClientTdispState::tdisp_bind_interface` primitive directly.
+**Reconfirmed at the public-API layer (high-level harness):** Kani
+harness `verify_tvm18_deactivate_err_response_does_not_advance_cache_via_lib` in
+[vm/devices/pci/vpci_client/src/kani_proofs_highlevel.rs](../vm/devices/pci/vpci_client/src/kani_proofs_highlevel.rs)
+(VERIFICATION FAILED in 141.6 s, 9773 VCCs) — drives the public
+`VpciDevice::tdisp_on_device_deactivate` entry point that the chipset
+MMIO disable edge actually calls. The same root cause is observable
+through the host-facing surface, so no orchestration-layer wrapper
+masks the bug.
 **Spec basis:** PCI-SIG TDISP v2022-07-27 §11.3.13 Table 17, §11.3.24,
 §11.6.3.
 
@@ -18,11 +28,13 @@ may forge any `tdi_state_after` value it likes alongside an error
 code — the TVM cannot use those bytes as authority for a state
 update.
 
-## Counter-example
+## Counter-examples
 
-The harness drives `tdisp_bind_interface()` with `state_before`
-symbolic over all four `TdispTdiState` variants and a fully-symbolic
-`GuestToHostResponse`. CBMC produces:
+### Low-level harness (Bind branch)
+
+The low-level harness drives `tdisp_bind_interface()` with
+`state_before` symbolic over all four `TdispTdiState` variants and a
+fully-symbolic `GuestToHostResponse`. CBMC produces:
 
 - `state_before = Unlocked`.
 - Malicious host returns
@@ -33,6 +45,31 @@ symbolic over all four `TdispTdiState` variants and a fully-symbolic
 - `error_code()` then returns `Some(InvalidDeviceState)` and the
   function returns `Err(...)`.
 - Post-state: `result.is_err()` ∧ `cached_after = Locked ≠ state_before`.
+
+### Public-API harness (Unbind branch via `tdisp_on_device_deactivate`)
+
+The high-level harness pre-caches `tdi_state = Run` plus a non-empty
+`validated_mmio_bars` / `dma_unblocked = true` / cached `tdi_report`,
+then calls `VpciDevice::tdisp_on_device_deactivate`. The mock host
+returns a fully-symbolic `GuestToHostResponse` whose `response` oneof
+is pinned to a matching `Unbind` payload but whose `result` and
+`tdi_state_after` are symbolic. CBMC produces:
+
+- Mock host returns `result = InvalidDeviceState` +
+  `tdi_state_after = Unlocked` (or any other decodable state).
+- `tdisp_on_device_deactivate` invokes `tdisp_unbind_preserve_report`,
+  which routes through the same `send_tdisp_command` body.
+- Cache flips to the host-claimed `tdi_state_after` **before** the
+  error-code branch is taken, then the function returns `Err`
+  internally. `tdisp_on_device_deactivate` discards the `Err` (its
+  signature is `() -> ()`).
+- Post-state: cached `tdi_state ≠ Run` (the entry state), even though
+  the host explicitly signalled the unbind failed.
+
+The assertion `host_result != Success ⇒ cached_after == Run` fails.
+This confirms that the cache-poisoning primitive is reachable from
+the public surface that the guest's MMIO disable edge actually
+traverses, not just from the internal `tdisp_bind_interface` API.
 
 ## Code basis
 

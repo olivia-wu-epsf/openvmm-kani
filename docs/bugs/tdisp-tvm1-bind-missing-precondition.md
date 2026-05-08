@@ -4,6 +4,19 @@
 **Discovered by:** Kani harness `verify_tvm1_bind_only_from_unlocked` in
 [vm/devices/pci/vpci_client/src/kani_proofs.rs](../vm/devices/pci/vpci_client/src/kani_proofs.rs)
 (VERIFICATION FAILED in 3.4 s — 1 of 592 checks).
+**Public-API coverage:** A counterpart harness driving the chipset
+MMIO enable edge (`VpciDevice::tdisp_on_device_activate`) is **not
+yet present**. The activate path runs a multi-step orchestration
+(unbind-if-not-Unlocked → query_capabilities → bind → get_report →
+start) and verifying the spec property at that layer requires a
+multi-shot symbolic `KaniMock` plus cfg(kani) shims for the
+`dev_snp_ohcl_tio_support` feature gate and the Vec-parsing report
+deserializer. Until that scaffolding lands, the precondition-gate
+property is verified only at the
+`VpciClientTdispState::tdisp_bind_interface` primitive layer. See
+[vm/devices/pci/vpci_client/src/kani_proofs_highlevel.rs](../vm/devices/pci/vpci_client/src/kani_proofs_highlevel.rs)
+for the public-API harness module that already covers TVM-18 /
+TVM-19 via `tdisp_on_device_deactivate`.
 **Spec basis:** PCI-SIG TDISP v2022-07-27 §11.3.1 Table 3, §11.3.8,
 §11.3.9 Table 12, §11.6.3, §11.2.7 Q4, §11.2 Figure 11-5.
 
