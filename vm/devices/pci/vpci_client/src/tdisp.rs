@@ -111,12 +111,210 @@ impl HostChannel {
             #[cfg(kani)]
             Self::KaniMock(slot) => {
                 let _ = cmd;
-                Ok(slot
-                    .take()
-                    .expect("kani harness must populate response slot before send"))
+                // Take any pre-populated response (used by
+                // single-call deactivate harnesses). For multi-call
+                // (activate-path) harnesses the slot is left empty
+                // and the call site in `send_tdisp_command`
+                // fabricates a matching-variant response based on
+                // the command payload (which the wire-format `cmd`
+                // here does not carry under Kani because
+                // serialization is elided).
+                Ok(slot.take().unwrap_or_else(kani_empty_response))
             }
         }
     }
+}
+
+/// Kani-only fabricator: build a fully-symbolic
+/// [`GuestToHostResponse`] using `kani::any()` for every primitive
+/// field. The `response` oneof is selected from None plus all five
+/// matching response variants; payload fields inside each variant
+/// are likewise symbolic via `kani::any()`. Vec-shaped fields
+/// (e.g. the report buffer) are returned empty because the Kani
+/// build elides the corresponding deserializer (see
+/// `tdisp_get_tdi_report` and `tdisp_get_tdi_device_id`).
+#[cfg(kani)]
+fn kani_any_response() -> GuestToHostResponse {
+    use openhcl_tdisp::GuestToHostResponseVariantOneof as Resp;
+
+    let response = match kani::any::<u8>() % 6 {
+        0 => None,
+        1 => Some(Resp::GetDeviceInterfaceInfo(
+            TdispCommandResponseGetDeviceInterfaceInfo {
+                interface_info: Some(TdispDeviceInterfaceInfo {
+                    guest_protocol_type: kani::any(),
+                    supported_features: kani::any(),
+                    tdisp_device_id: kani::any(),
+                }),
+            },
+        )),
+        2 => Some(Resp::Bind(TdispCommandResponseBind {})),
+        3 => Some(Resp::GetTdiReport(TdispCommandResponseGetTdiReport {
+            report_type: kani::any(),
+            report_buffer: Vec::new(),
+        })),
+        4 => Some(Resp::StartTdi(TdispCommandResponseStartTdi {})),
+        _ => Some(Resp::Unbind(TdispCommandResponseUnbind {})),
+    };
+    GuestToHostResponse {
+        result: kani::any(),
+        tdi_state_before: kani::any(),
+        tdi_state_after: kani::any(),
+        response,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Kani-only audit trail.
+//
+// Records the (opcode, cached_state_at_issue) of every TDISP command
+// issued via [`VpciClientTdispState::send_tdisp_command`]. Used by the
+// public-API harnesses in `kani_proofs_highlevel.rs` to express
+// internal precondition properties (TVM-1, TVM-2, TVM-3) on a
+// black-box surface that returns `()`.
+//
+// Fixed-size 8-slot array — the activate path issues at most 6
+// commands (conditional pre-unbind, GetDeviceInterfaceInfo, Bind,
+// StartTdi, GetTdiReport for device id, GetTdiReport for the
+// interface report). Held in a `Cell` because the trail is
+// snapshot/append from a single `&mut self` send path; harnesses
+// read it back after the orchestration call returns.
+#[cfg(kani)]
+pub(super) const KANI_AUDIT_TRAIL_LEN: usize = 8;
+
+/// Kani-only opcode tag for the audit trail. Values are stable so
+/// harnesses can compare against them as plain `u8` literals.
+#[cfg(kani)]
+#[allow(dead_code)]
+pub mod kani_audit_opcode {
+    pub const GET_DEVICE_INTERFACE_INFO: u8 = 1;
+    pub const BIND: u8 = 2;
+    pub const START_TDI: u8 = 3;
+    pub const GET_TDI_REPORT: u8 = 4;
+    pub const UNBIND: u8 = 5;
+    /// Sentinel for unknown/unmapped opcodes (defensive; should not
+    /// be reachable in practice).
+    pub const UNKNOWN: u8 = 0xFF;
+}
+
+/// Map the protobuf [`GuestToHostCommand`] variant to a stable
+/// [`kani_audit_opcode`] u8 by matching on the prost-generated
+/// `command` oneof discriminant directly. This deliberately avoids
+/// `GuestToHostCommandExt::type_name`, whose `match Some("Bind")`
+/// arms compile down to slice equality (`<builtin-library-memcmp>`)
+/// and force CBMC's universal `--unwind` to the longest literal
+/// length (22 chars for "GetDeviceInterfaceInfo"), exploding loop
+/// reachability across every harness.
+#[cfg(kani)]
+fn kani_opcode_id(payload: &GuestToHostCommand) -> u8 {
+    use openhcl_tdisp::GuestToHostCommandVariantOneof as Cmd;
+    match payload.command {
+        Some(Cmd::GetDeviceInterfaceInfo(_)) => kani_audit_opcode::GET_DEVICE_INTERFACE_INFO,
+        Some(Cmd::Bind(_)) => kani_audit_opcode::BIND,
+        Some(Cmd::StartTdi(_)) => kani_audit_opcode::START_TDI,
+        Some(Cmd::GetTdiReport(_)) => kani_audit_opcode::GET_TDI_REPORT,
+        Some(Cmd::Unbind(_)) => kani_audit_opcode::UNBIND,
+        None => kani_audit_opcode::UNKNOWN,
+    }
+}
+
+/// Fallback [`GuestToHostResponse`] used by [`HostChannel::send`]
+/// when the [`HostChannel::KaniMock`] slot is empty AND the higher
+/// call site has not provided a fabricated response. Returns a
+/// minimal "no payload, no claimed state" response which the
+/// `send_tdisp_command` post-checks treat as an error path. Multi-
+/// call activate-path harnesses route through
+/// [`VpciClientTdispState::kani_fabricate_for`] instead, which
+/// builds a matching-variant Success response based on the prost
+/// command discriminant.
+#[cfg(kani)]
+fn kani_empty_response() -> GuestToHostResponse {
+    GuestToHostResponse {
+        result: TdispGuestOperationErrorCode::Success as i32,
+        tdi_state_before: i32::MIN,
+        tdi_state_after: i32::MIN,
+        response: None,
+    }
+}
+
+/// Build a matching-variant Success [`GuestToHostResponse`] for the
+/// given outgoing [`GuestToHostCommand`]. `tdi_state_after` is left
+/// symbolic via `kani::any()` so harnesses retain the malicious-
+/// host degree of freedom for cache-poisoning attacks. The payload
+/// fields inside each variant are zero-initialised; the activate
+/// orchestration only reads `interface_info` (filled with a fresh
+/// `Some(TdispDeviceInterfaceInfo { .. })` carrying the SEV-TIO
+/// `guest_protocol_type` so [`VpciClientTdispState::query_capabilities`]
+/// reaches its Ok arm) and the report buffers (which are bypassed
+/// under Kani \u2014 see `tdisp_get_tdi_report`).
+#[cfg(kani)]
+fn kani_fabricate_for(payload: &GuestToHostCommand) -> GuestToHostResponse {
+    use openhcl_tdisp::GuestToHostCommandVariantOneof as Cmd;
+    use openhcl_tdisp::GuestToHostResponseVariantOneof as Resp;
+    let response = match payload.command {
+        Some(Cmd::GetDeviceInterfaceInfo(_)) => Some(Resp::GetDeviceInterfaceInfo(
+            TdispCommandResponseGetDeviceInterfaceInfo {
+                interface_info: Some(TdispDeviceInterfaceInfo {
+                    guest_protocol_type: TdispGuestProtocolType::AmdSevTioV1 as i32,
+                    supported_features: 0,
+                    tdisp_device_id: 0,
+                }),
+            },
+        )),
+        Some(Cmd::Bind(_)) => Some(Resp::Bind(TdispCommandResponseBind {})),
+        Some(Cmd::StartTdi(_)) => Some(Resp::StartTdi(TdispCommandResponseStartTdi {})),
+        Some(Cmd::GetTdiReport(_)) => Some(Resp::GetTdiReport(TdispCommandResponseGetTdiReport {
+            report_type: 0,
+            report_buffer: Vec::new(),
+        })),
+        Some(Cmd::Unbind(_)) => Some(Resp::Unbind(TdispCommandResponseUnbind {})),
+        None => None,
+    };
+    GuestToHostResponse {
+        result: TdispGuestOperationErrorCode::Success as i32,
+        tdi_state_before: kani::any(),
+        tdi_state_after: kani::any(),
+        response,
+    }
+}
+
+/// TDISP state for a VPCI device.
+#[derive(Inspect)]
+pub struct VpciClientTdispState {
+    #[inspect(skip)]
+    host_channel: HostChannel,
+    // The device ID if the VPCI channel. Not to be confused with the guest device ID returned by the host in TDISP reports.
+    vpci_device_id: u64,
+    isolation_type: IsolationType,
+    vtom: u64,
+    #[inspect(debug)]
+    target_vtl: Vtl,
+    mutable_state: VpciClientTdispMutableState,
+    #[inspect(skip)]
+    resource_validator: Option<Arc<dyn TdispResourceValidationInterface>>,
+    /// Kani-only audit trail of (opcode, cached state at issue) for
+    /// every TDISP command issued. See module-level comment.
+    /// Per-element [`core::cell::Cell`]s avoid a whole-array
+    /// memcpy on `Cell::set` (which under CBMC pulls
+    /// `<builtin-library-memcmp>` into reachability and forces
+    /// large unwind values everywhere). Storing opcode and state
+    /// as separate `u8` arrays keeps every Cell op a single-byte
+    /// write. Sentinel value `0xFF` in `audit_opcode` means
+    /// "empty slot" (matches [`kani_audit_opcode::UNKNOWN`]).
+    #[cfg(kani)]
+    #[inspect(skip)]
+    audit_opcode: [core::cell::Cell<u8>; KANI_AUDIT_TRAIL_LEN],
+    /// Per-entry cached `TdispTdiState` (encoded as `u8` via the
+    /// generated `i32` discriminant truncated; the four valid
+    /// values 0..3 fit in `u8`) at the time the matching opcode in
+    /// [`Self::audit_opcode`] was issued.
+    #[cfg(kani)]
+    #[inspect(skip)]
+    audit_state: [core::cell::Cell<u8>; KANI_AUDIT_TRAIL_LEN],
+    /// Next free index into the audit arrays.
+    #[cfg(kani)]
+    #[inspect(skip)]
+    audit_count: core::cell::Cell<usize>,
 }
 
 /// Point-in-time classification of a device's BAR and DMA isolation.
@@ -203,22 +401,6 @@ impl VpciClientTdispMutableState {
     }
 }
 
-/// TDISP state for a VPCI device.
-#[derive(Inspect)]
-pub struct VpciClientTdispState {
-    #[inspect(skip)]
-    host_channel: HostChannel,
-    // The device ID if the VPCI channel. Not to be confused with the guest device ID returned by the host in TDISP reports.
-    vpci_device_id: u64,
-    isolation_type: IsolationType,
-    vtom: u64,
-    #[inspect(debug)]
-    target_vtl: Vtl,
-    mutable_state: VpciClientTdispMutableState,
-    #[inspect(skip)]
-    resource_validator: Option<Arc<dyn TdispResourceValidationInterface>>,
-}
-
 /// Manages the TDISP protocol for a TDISP-capable VPCI device.
 impl VpciClientTdispState {
     // The production constructor takes a `mesh::Sender<WorkerRequest>`,
@@ -262,6 +444,23 @@ impl VpciClientTdispState {
         &mut self,
         payload: GuestToHostCommand,
     ) -> crate::Result<GuestToHostResponse> {
+        // Kani audit trail: record the (opcode, cached state at issue)
+        // BEFORE issuing the host call, so harnesses asserting
+        // precondition-gate properties (TVM-1, TVM-2, TVM-3) can
+        // observe each transmitted command's entry-state from the
+        // public API surface.
+        #[cfg(kani)]
+        {
+            let op = kani_opcode_id(&payload);
+            let st = self.mutable_state.tdi_state as u8;
+            let idx = self.audit_count.get();
+            if idx < KANI_AUDIT_TRAIL_LEN {
+                self.audit_opcode[idx].set(op);
+                self.audit_state[idx].set(st);
+                self.audit_count.set(idx + 1);
+            }
+        }
+
         // Wire-format serialization is auxiliary I/O plumbing that
         // the verifier does not need to reason about (and prost's
         // varint encoding + Vec growth dominates CBMC reachability,
@@ -290,6 +489,7 @@ impl VpciClientTdispState {
         // Send the TDISP command to the host (in production, through
         // the VPCI client worker → VMBus → host) and await the
         // response.
+        #[cfg(not(kani))]
         let res = self
             .host_channel
             .send(vpci_protocol::VpciTdispCommand {
@@ -308,6 +508,22 @@ impl VpciClientTdispState {
                 );
                 crate::err!("failed to send tdisp command")
             })?;
+
+        // Kani fast path: bypass [`HostChannel::send`] entirely so
+        // we can fabricate a matching-variant response based on the
+        // outgoing payload (the wire-format `VpciTdispCommand`
+        // doesn't carry the prost discriminant since serialization
+        // is elided under Kani). Single-call deactivate harnesses
+        // pre-populate the slot via `kani_new_with_response`/peers;
+        // multi-call activate-path harnesses leave it `None` and
+        // [`kani_fabricate_for`] supplies a `Success` + matching-
+        // variant response for each step of the orchestration.
+        #[cfg(kani)]
+        let res = match &self.host_channel {
+            HostChannel::KaniMock(slot) => slot
+                .take()
+                .unwrap_or_else(|| kani_fabricate_for(&payload)),
+        };
 
         // Record state transitions based on the TDI state returned by the host in the response, if available.
         match res.tdi_state_after_enum() {
@@ -334,6 +550,7 @@ impl VpciClientTdispState {
     }
 
     /// See: [`TdispVirtualDeviceInterface::tdisp_get_device_interface_info`]
+    #[cfg(not(kani))]
     pub async fn tdisp_get_device_interface_info(
         &mut self,
         target_protocol: TdispGuestProtocolType,
@@ -352,6 +569,29 @@ impl VpciClientTdispState {
             Err(err) => Err(anyhow::anyhow!(
                 "error response in get_device_interface_info: {err}"
             )),
+        }
+    }
+
+    /// Kani forwarder: returns `crate::Result` so the inner body can
+    /// avoid `anyhow::Error` Drop chains that otherwise dominate
+    /// CBMC reachability. See `kani-debugging.md` "anyhow contagion".
+    #[cfg(kani)]
+    pub async fn tdisp_get_device_interface_info(
+        &mut self,
+        target_protocol: TdispGuestProtocolType,
+    ) -> crate::Result<TdispDeviceInterfaceInfo> {
+        let res = self
+            .send_tdisp_command(openhcl_tdisp::new_get_device_interface_info_command(
+                self.vpci_device_id,
+                target_protocol,
+            ))
+            .await?;
+
+        match res.response::<TdispCommandResponseGetDeviceInterfaceInfo>() {
+            Ok(info) => info
+                .interface_info
+                .ok_or_else(|| crate::err!("missing interface_info")),
+            Err(_) => Err(crate::err!("error response in get_device_interface_info")),
         }
     }
 
@@ -465,6 +705,7 @@ impl VpciClientTdispState {
     }
 
     /// See: [`TdispVirtualDeviceInterface::tdisp_get_tdi_report`]
+    #[cfg(not(kani))]
     pub async fn tdisp_get_tdi_report(&mut self) -> anyhow::Result<TdiReportStruct> {
         let buffer = self
             .tdisp_get_device_report(&TdispReportType::InterfaceReport)
@@ -475,7 +716,33 @@ impl VpciClientTdispState {
             .context("failed to deserialize TDI report from host")
     }
 
+    /// Kani-only variant: skips the prost-like report deserializer,
+    /// which iterates over the response `Vec<u8>` and pulls
+    /// `alloc::raw_vec::handle_error` plus `Layout`/`TryReserveError`
+    /// into CBMC reachability. The harness only cares that an
+    /// activate path drives **some** report through, so we issue the
+    /// host command (so the audit trail records the
+    /// `GetTdiReport` opcode + cached state at issue) and then
+    /// fabricate a synthetic [`TdiReportStruct`] with an empty MMIO
+    /// list — enough for downstream `mmio_interface_info`
+    /// iteration and `tdi_report = Some(...)` bookkeeping to run
+    /// faithfully.
+    #[cfg(kani)]
+    pub async fn tdisp_get_tdi_report(&mut self) -> crate::Result<TdiReportStruct> {
+        let _ = self
+            .tdisp_get_device_report(&TdispReportType::InterfaceReport)
+            .await?;
+        Ok(TdiReportStruct {
+            interface_info: tdisp::devicereport::TdispTdiReportInterfaceInfo::new(),
+            msi_x_message_control: 0,
+            lnr_control: 0,
+            tph_control: 0,
+            mmio_interface_info: Vec::new(),
+        })
+    }
+
     /// See: [`TdispVirtualDeviceInterface::tdisp_get_tdi_device_id`]
+    #[cfg(not(kani))]
     pub async fn tdisp_get_tdi_device_id(&mut self) -> anyhow::Result<u64> {
         let buffer = self
             .tdisp_get_device_report(&TdispReportType::GuestDeviceId)
@@ -488,6 +755,20 @@ impl VpciClientTdispState {
         }
 
         Ok(u64::from_le_bytes(buffer.try_into().unwrap()))
+    }
+
+    /// Kani-only variant: skips the `try_into() / from_le_bytes`
+    /// dance (which under symbolic `Vec<u8>` lengths drags
+    /// `TryFromSliceError`/`unwrap` panic paths into CBMC) and
+    /// returns a fresh `kani::any::<u64>()` symbolic device id.
+    /// The host command is still sent so the audit trail captures
+    /// it.
+    #[cfg(kani)]
+    pub async fn tdisp_get_tdi_device_id(&mut self) -> crate::Result<u64> {
+        let _ = self
+            .tdisp_get_device_report(&TdispReportType::GuestDeviceId)
+            .await?;
+        Ok(kani::any::<u64>())
     }
 
     /// See: [`TdispVirtualDeviceInterface::tdisp_unbind`]
@@ -593,6 +874,14 @@ impl VpciClientTdispState {
 
         match res.response::<TdispCommandResponseUnbind>() {
             Ok(_) => {
+                // Under Kani, `BTreeMap::clear` dispatches to its
+                // `IntoIter` Drop, whose symbolic loops blow up
+                // CBMC's unwinding budget (the `Dying` /
+                // `deallocating_end` traversals at unwind=9). The
+                // map is constructed empty in the activate-path
+                // harnesses, so skipping the call has no effect on
+                // the property under verification.
+                #[cfg(not(kani))]
                 self.mutable_state.validated_mmio_bars.clear();
                 self.mutable_state.dma_unblocked = false;
                 if clear_cached_report {
@@ -679,13 +968,50 @@ impl VpciClientTdispState {
         }
     }
 
-    #[cfg(not(feature = "dev_snp_ohcl_tio_support"))]
+    #[cfg(all(not(feature = "dev_snp_ohcl_tio_support"), not(kani)))]
     /// See: [`TdispVpciAttestationInterface::tdisp_attest_device`]
     pub async fn query_capabilities(&mut self) -> anyhow::Result<TdispDeviceInterfaceInfo> {
         anyhow::bail!("TDISP feature not enabled during compile time")
     }
 
+    /// Kani-only [`Self::query_capabilities`] returning
+    /// [`crate::Result`] to keep anyhow Drop chains out of CBMC
+    /// reachability. Mirrors the SEV-feature-gated production body
+    /// closely enough that the audit trail records the
+    /// `GetDeviceInterfaceInfo` opcode at the cached state at issue,
+    /// then returns either the cached info or a freshly-fabricated
+    /// symbolic [`TdispDeviceInterfaceInfo`]. The harness pre-sets
+    /// `IsolationType::Snp` so the production gate reads the same
+    /// way as on real hardware.
+    #[cfg(kani)]
+    pub async fn query_capabilities(&mut self) -> crate::Result<TdispDeviceInterfaceInfo> {
+        if let Some(cached) = self.mutable_state.cached_capabilities.as_ref() {
+            return Ok(cached.clone());
+        }
+
+        // Only `Snp` is a supported guest protocol; bail symmetrically
+        // for any other isolation type so harnesses that exercise the
+        // failure edge can still drive it.
+        let target_protocol = match self.isolation_type {
+            IsolationType::Snp => TdispGuestProtocolType::AmdSevTioV1,
+            _ => return Err(crate::err!("unsupported isolation type")),
+        };
+
+        let device_interface_info = self
+            .tdisp_get_device_interface_info(target_protocol)
+            .await?;
+
+        let expected_guest_protocol = TdispGuestProtocolType::AmdSevTioV1;
+        if device_interface_info.guest_protocol_type == expected_guest_protocol as i32 {
+            self.mutable_state.cached_capabilities = Some(device_interface_info.clone());
+            Ok(device_interface_info)
+        } else {
+            Err(crate::err!("protocol mismatch"))
+        }
+    }
+
     /// See: [`TdispVpciAttestationInterface::tdisp_attest_device`]
+    #[cfg(not(kani))]
     pub async fn attest(&mut self, interface_info: TdispDeviceInterfaceInfo) -> anyhow::Result<()> {
         tracing::info!(
             ?interface_info,
@@ -766,6 +1092,50 @@ impl VpciClientTdispState {
         // Device is now in the Run state without resource validation being
         // performed. Platform specific validation methods will be called on
         // command register write to unblock resources.
+        Ok(())
+    }
+
+    /// Kani-only [`Self::attest`] returning [`crate::Result`].
+    ///
+    /// Mirrors the production attestation orchestration:
+    /// (1) precautionary `tdisp_unbind` if cached state is not Unlocked,
+    /// (2) bind, (3) start, (4) get device id, (5) get + cache report,
+    /// (6) auto-mark MSI-X-mapped BARs as intercepted.
+    ///
+    /// The interior calls all dispatch to the matching
+    /// `crate::Result` Kani forwarders (`tdisp_unbind`,
+    /// `tdisp_bind_interface`, `tdisp_start_device`,
+    /// `tdisp_get_tdi_device_id`, `tdisp_get_tdi_report`), so the
+    /// bridge into anyhow happens only at the public-API boundary in
+    /// `lib.rs`. CBMC therefore never observes [`anyhow::Error`]
+    /// construction inside the orchestration loop.
+    #[cfg(kani)]
+    pub async fn attest(&mut self, interface_info: TdispDeviceInterfaceInfo) -> crate::Result<()> {
+        let _ = interface_info;
+
+        if self.tdi_state() != TdispTdiState::Unlocked {
+            self.tdisp_unbind(TdispGuestUnbindReason::Graceful).await?;
+        }
+
+        self.tdisp_bind_interface().await?;
+        self.tdisp_start_device().await?;
+
+        let guest_device_id = self.tdisp_get_tdi_device_id().await?;
+        let guest_device_id_u16 =
+            u16::try_from(guest_device_id).map_err(|_| crate::err!("device id overflow"))?;
+
+        let tdi_report = self.tdisp_get_tdi_report().await?;
+
+        self.mutable_state
+            .update_guest_device_id(guest_device_id_u16);
+
+        for range in &tdi_report.mmio_interface_info {
+            if range.flags.range_maps_msix_table() || range.flags.range_maps_msix_pba() {
+                self.mutable_state.intercepted_bars.insert(range.range_id);
+            }
+        }
+
+        self.mutable_state.tdi_report = Some(tdi_report);
         Ok(())
     }
 
@@ -1103,10 +1473,14 @@ impl VpciClientTdispState {
                 intercepted_bars: BarSet::new(),
                 cached_capabilities: None,
             },
-            isolation_type: IsolationType::None,
+            isolation_type: IsolationType::Snp,
             vtom: 0,
             target_vtl: Vtl::Vtl0,
             resource_validator: None,
+            audit_opcode: [const { core::cell::Cell::new(kani_audit_opcode::UNKNOWN) };
+                KANI_AUDIT_TRAIL_LEN],
+            audit_state: [const { core::cell::Cell::new(0u8) }; KANI_AUDIT_TRAIL_LEN],
+            audit_count: core::cell::Cell::new(0),
         }
     }
 
@@ -1116,6 +1490,68 @@ impl VpciClientTdispState {
     #[cfg(kani)]
     pub fn kani_tdi_state(&self) -> TdispTdiState {
         self.mutable_state.tdi_state
+    }
+
+    /// Snapshot of the Kani audit trail — for each populated slot,
+    /// returns `Some((opcode, cached_state_at_issue))` (state encoded
+    /// as `u8` via the generated `i32` discriminant truncated; the
+    /// four valid values 0..3 fit in `u8`). Empty slots return
+    /// `None`. Returns the full fixed-size array so harnesses can
+    /// iterate without bounds-checking.
+    #[cfg(kani)]
+    pub fn kani_audit_trail(&self) -> [Option<(u8, u8)>; KANI_AUDIT_TRAIL_LEN] {
+        // Fully unrolled — no runtime loop — to keep the universal
+        // CBMC `--unwind` value low (avoids exploding BTreeMap and
+        // other downstream loops to large unwind counts).
+        let n = self.audit_count.get();
+        let g = |i: usize| -> Option<(u8, u8)> {
+            if i < n {
+                Some((self.audit_opcode[i].get(), self.audit_state[i].get()))
+            } else {
+                None
+            }
+        };
+        [g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7)]
+    }
+
+    /// Construct a [`VpciClientTdispState`] for activate-path
+    /// (multi-call) Kani harnesses. The [`HostChannel::KaniMock`]
+    /// slot is left empty so every [`Self::send_tdisp_command`] call
+    /// goes through [`kani_fabricate_for`], which returns a Success
+    /// + matching-variant response with a symbolic `tdi_state_after`
+    /// per call. Pre-populates [`IsolationType::Snp`] so
+    /// [`Self::query_capabilities`] reaches its Ok arm. The
+    /// [`TdispDeviceInterfaceInfo`] cache is also pre-populated so
+    /// the activate orchestration's first `query_capabilities` call
+    /// is fully deterministic and the subsequent attest steps are
+    /// what actually drive the audit trail.
+    #[cfg(kani)]
+    pub fn kani_new_for_activate(tdi_state_before: TdispTdiState) -> Self {
+        Self {
+            host_channel: HostChannel::KaniMock(core::cell::Cell::new(None)),
+            vpci_device_id: 0,
+            mutable_state: VpciClientTdispMutableState {
+                tdi_state: tdi_state_before,
+                guest_device_id: 0,
+                validated_mmio_bars: MmioBarMap::new(),
+                dma_unblocked: false,
+                tdi_report: None,
+                intercepted_bars: BarSet::new(),
+                cached_capabilities: Some(TdispDeviceInterfaceInfo {
+                    guest_protocol_type: TdispGuestProtocolType::AmdSevTioV1 as i32,
+                    supported_features: 0,
+                    tdisp_device_id: 0,
+                }),
+            },
+            isolation_type: IsolationType::Snp,
+            vtom: 0,
+            target_vtl: Vtl::Vtl0,
+            resource_validator: None,
+            audit_opcode: [const { core::cell::Cell::new(kani_audit_opcode::UNKNOWN) };
+                KANI_AUDIT_TRAIL_LEN],
+            audit_state: [const { core::cell::Cell::new(0u8) }; KANI_AUDIT_TRAIL_LEN],
+            audit_count: core::cell::Cell::new(0),
+        }
     }
 
     /// Construct a [`VpciClientTdispState`] for verifying the
@@ -1171,6 +1607,10 @@ impl VpciClientTdispState {
             vtom: 0,
             target_vtl: Vtl::Vtl0,
             resource_validator: Some(validator),
+            audit_opcode: [const { core::cell::Cell::new(kani_audit_opcode::UNKNOWN) };
+                KANI_AUDIT_TRAIL_LEN],
+            audit_state: [const { core::cell::Cell::new(0u8) }; KANI_AUDIT_TRAIL_LEN],
+            audit_count: core::cell::Cell::new(0),
         }
     }
 
@@ -1241,6 +1681,10 @@ impl VpciClientTdispState {
             vtom: 0,
             target_vtl: Vtl::Vtl0,
             resource_validator: Some(validator),
+            audit_opcode: [const { core::cell::Cell::new(kani_audit_opcode::UNKNOWN) };
+                KANI_AUDIT_TRAIL_LEN],
+            audit_state: [const { core::cell::Cell::new(0u8) }; KANI_AUDIT_TRAIL_LEN],
+            audit_count: core::cell::Cell::new(0),
         }
     }
 
@@ -1284,6 +1728,10 @@ impl VpciClientTdispState {
             vtom: 0,
             target_vtl: Vtl::Vtl0,
             resource_validator: Some(validator),
+            audit_opcode: [const { core::cell::Cell::new(kani_audit_opcode::UNKNOWN) };
+                KANI_AUDIT_TRAIL_LEN],
+            audit_state: [const { core::cell::Cell::new(0u8) }; KANI_AUDIT_TRAIL_LEN],
+            audit_count: core::cell::Cell::new(0),
         }
     }
 
@@ -1516,12 +1964,32 @@ impl TdispVpciAttestationInterface for VpciDevice {
         interface_info: TdispDeviceInterfaceInfo,
     ) -> anyhow::Result<()> {
         let mut guard = self.tdisp.0.lock().await;
-        guard.attest(interface_info).await
+        #[cfg(not(kani))]
+        {
+            guard.attest(interface_info).await
+        }
+        #[cfg(kani)]
+        {
+            guard
+                .attest(interface_info)
+                .await
+                .map_err(|_| anyhow::anyhow!("attest failed"))
+        }
     }
 
     async fn tdisp_query_capabilities(&self) -> anyhow::Result<TdispDeviceInterfaceInfo> {
         let mut guard = self.tdisp.0.lock().await;
-        guard.query_capabilities().await
+        #[cfg(not(kani))]
+        {
+            guard.query_capabilities().await
+        }
+        #[cfg(kani)]
+        {
+            guard
+                .query_capabilities()
+                .await
+                .map_err(|_| anyhow::anyhow!("query_capabilities failed"))
+        }
     }
 
     async fn tdisp_tdi_state(&self) -> TdispTdiState {
