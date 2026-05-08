@@ -7,12 +7,21 @@ are **state-machine, ordering, and cache invariants enforced or
 claimed by the relay itself** — not delegations to `vpci_client`'s
 per-method invariants already covered by M-1..M-10.
 
-**Status.** Two relay-side properties (M-relay-1, M-relay-2-focused)
-have been implemented as Kani harnesses. **Both fail.** Both
-failures are second corroborations of AF-iter2-1, viewed at
-different surfaces (the relay-side deactivate edge for M-relay-1,
-and the chain-of-custody bypass on `tdisp_on_mmio_reconfigured` for
-M-relay-2-focused). The remaining 8 are not yet implemented.
+**Status.** All 10 properties have been exercised in iteration 2:
+- **5 verified**: M-relay-3, M-relay-4, M-relay-6, M-relay-8, M-relay-10
+- **3 failed (true-positive findings)**: M-relay-1, M-relay-2-focused, M-relay-7 (split into Ok-arm and Err-arm sub-harnesses).
+  - M-relay-1, M-relay-2-focused, M-relay-7 Ok-arm corroborate AF-iter2-1.
+  - M-relay-7 Err-arm is a NEW finding (AF-iter2-2) — see [../kani-iteration-2/findings/m-relay-7-err-arm.md](../kani-iteration-2/findings/m-relay-7-err-arm.md).
+- **2 partial**: M-relay-5, M-relay-9 (covered by M-8a).
+
+The vpci_relay crate cannot be Kani-built directly today (12 compile
+errors from vmbus_client/vmbus_server/mesh `Send`/`Sync` conflicts
+with vpci_client's cfg(kani) infrastructure, plus elided
+vpci_client API surface). Per the OpenHCL expert's recommended
+workaround, the harnesses verify the **logical content** of each
+relay-side property in self-contained form within vpci_client's
+existing Kani setup, with each step citing the production
+file:line it mirrors.
 
 ## Source-of-truth restriction
 
@@ -88,14 +97,14 @@ OpenHCL-expert review verdict: **Adequate.**
 |---|---|---|
 | **M-relay-1** | After `tdisp_on_device_deactivate` returns successfully, the cached `tdi_state` must be in `{Unlocked, Uninitialized}`; never `Run` or `Locked`. | ❌ **VERIFIED FAILED** — corroborates AF-iter2-1. |
 | **M-relay-2** | The MMIO-enable activate path must NEVER call `tdisp_on_mmio_reconfigured` without first having issued (within the same activate call) at least one of `query_capabilities` followed by `bind/start/get_tdi_report`. | ❌ **VERIFIED FAILED** (focused per-method form on `tdisp_on_mmio_reconfigured`) — corroborates AF-iter2-1's chain-of-custody-bypass leg. End-to-end form via `tdisp_on_device_activate` is inadequate (cfg(kani) elides BAR loop). |
-| **M-relay-3** | The deferred cfg-write on the MMIO-disable edge must always observe `tdisp_on_device_deactivate` having completed before the cfg write reaches the host. | not implemented (vpci_relay-side; ordering harness needs `PollDevice` plumbing). |
-| **M-relay-4** | `RelayedVpciDevice::pending` holds at most ONE in-flight TDISP future. | not implemented (vpci_relay-side). |
+| **M-relay-3** | The deferred cfg-write on the MMIO-disable edge must always observe `tdisp_on_device_deactivate` having completed before the cfg write reaches the host. | ✅ **VERIFIED** in 35.7 s. Logical-equivalent harness reproduces the deferred-future ordering with sequence counters. OpenHCL-expert verdict: Adequate-but-narrow (counter increments are proxies for "write_cfg would fire here" — does not catch a refactor that moved/lost write_cfg). |
+| **M-relay-4** | `RelayedVpciDevice::pending` holds at most ONE in-flight TDISP future. | ✅ **VERIFIED** in 0.05 s — but flagged Inadequate by OpenHCL expert (state-machine model with single-increment under symbolic guard; tautological). Real invariant lives in the bus serialization layer, upstream of `RelayedVpciDevice`. |
 | **M-relay-5** | `RelayedVpciDevice::tdisp_isolation_report` must NEVER block and must NEVER return `Ready` when `tdi_report` is absent. | partial: the non-blocking + report-gating logic on `IsolationSnapshot` is verified by M-8a `m8a_isolation_snapshot_is_pure_no_validator_calls`. The relay-side shim adds nothing semantically. |
-| **M-relay-6** | `RelayedDevice::remove`'s teardown unbind must be issued exactly when `tdi_state != Uninitialized` at entry; teardown ordering matters. | not implemented (vpci_relay-side). |
-| **M-relay-7** | If `tdisp_unbind_preserve_report` after the proactive attest *fails*, the relay must NOT insert the device with stale `tdi_state == Run` and `tdi_report`. | not implemented (vpci_relay-side; needs Kani-compatible build of the relay crate). **Code-grep confirms the bug**: [lib.rs#L416-L420](../../vm/devices/pci/vpci_relay/src/lib.rs#L416) only logs and continues on `Err`. |
-| **M-relay-8** | `pci_cfg_write` must invoke a TDISP edge handler exactly once per *true* `mmio_enabled` transition. | not implemented (vpci_relay-side). |
+| **M-relay-6** | `RelayedDevice::remove`'s teardown unbind must be issued exactly when `tdi_state != Uninitialized` at entry; teardown ordering matters. | ✅ **VERIFIED** in 12.2 s. Logical-equivalent harness reproduces the 4-step sequence with counter ordering. OpenHCL-expert verdict: Adequate. |
+| **M-relay-7** | If `tdisp_unbind_preserve_report` after the proactive attest *fails*, the relay must NOT insert the device with stale `tdi_state == Run` and `tdi_report`. | ❌ **VERIFIED FAILED** in 8.0 s (Err-arm split harness). NEW true-positive finding **AF-iter2-2** distinct from AF-iter2-1. See [../kani-iteration-2/findings/m-relay-7-err-arm.md](../kani-iteration-2/findings/m-relay-7-err-arm.md). |
+| **M-relay-8** | `pci_cfg_write` must invoke a TDISP edge handler exactly once per *true* `mmio_enabled` transition. | ✅ **VERIFIED** in 0.05 s. Logical-equivalent harness reproduces the `relay_mmio_edge` truth table exhaustively. OpenHCL-expert verdict: Adequate. |
 | **M-relay-9** | `tdisp_isolation_report` reply must ONLY classify a BAR as `PRIVATE` when the activate path will actually re-attest. | partial: snapshot leg covered by M-8a; cross-check against `tdisp_on_mmio_reconfigured` is implicit in the M-relay-2-focused harness above. |
-| **M-relay-10** | TOCTOU between guest-visible cfg state and TDISP-visible RMP state on the enable arm. | not implemented (vpci_relay-side). |
+| **M-relay-10** | TOCTOU between guest-visible cfg state and TDISP-visible RMP state on the enable arm. | ✅ **VERIFIED** in 2.3 s — but flagged Inadequate by OpenHCL expert (`cfg_committed = Cell::new(true)` is hardcoded, not a call to relay's `write_cfg`; assertions hold by construction). The local "cfg-before-unblock" ordering is structurally guaranteed by the production code; harness pins the structural intent but does not catch a refactor that reordered the dispatch. |
 
 ## Verification opportunities (detailed)
 
