@@ -1374,7 +1374,10 @@ fn m_relay_3_disable_edge_state_read_precedes_write() {
 
         // Step 2: branch on cached state, mirroring the
         // production `if state == Uninitialized || Unlocked`.
-        if matches!(state, TdispTdiState::Uninitialized | TdispTdiState::Unlocked) {
+        if matches!(
+            state,
+            TdispTdiState::Uninitialized | TdispTdiState::Unlocked
+        ) {
             // Direct write path.
             counter.set(counter.get() + 1);
             write_seq.set(counter.get());
